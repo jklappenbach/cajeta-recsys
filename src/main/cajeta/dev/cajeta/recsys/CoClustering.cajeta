@@ -1,0 +1,265 @@
+package dev.cajeta.recsys;
+
+import cajeta.math.Tensor;
+import cajeta.math.random.Generator;
+
+/**
+ * The co-clustering recommender (spec §6) — Surprise's `CoClustering`:
+ * users and items are SIMULTANEOUSLY assigned to clusters, and a rating
+ * is predicted from the co-cluster mean plus the user's and item's
+ * offsets from their cluster means:
+ *
+ *   r̂ = A(g,h) + (mean_u − A_u(g)) + (mean_i − A_i(h))
+ *
+ * Each epoch recomputes the cluster/co-cluster averages, then reassigns
+ * every user (and then every item) to the cluster minimizing its
+ * squared prediction error. Seeded via `cajeta.math.random.Generator`
+ * (bitwise Surprise parity impossible across RNGs — the pinned claim is
+ * held-out RMSE; DifferencesFromOracles.md).
+ *
+ * **Fallback chain, documented** (§6.3): an EMPTY cluster or co-cluster
+ * averages to the global mean; at predict time, unknown user → the
+ * item's mean, unknown item → the user's mean, both unknown → the
+ * global mean.
+ */
+public final class CoClustering implements RatingPredictor {
+
+    int64 kU;
+    int64 kI;
+    int64 epochs;
+    uint64 seed;
+
+    int64[] cu;          // user → cluster
+    int64[] ci;          // item → cluster
+    float64[] aU;        // [kU] user-cluster means
+    float64[] aI;        // [kI] item-cluster means
+    float64[] aC;        // [kU*kI] co-cluster means
+    float64[] uMean;
+    float64[] iMean;
+    float64 mu;
+    float64 lo;
+    float64 hi;
+    int64 nU;
+    int64 nI;
+    boolean fitted;
+
+    public CoClustering(int64 userClusters, int64 itemClusters,
+                        int64 epochs, uint64 seed) {
+        if (userClusters < 1 || itemClusters < 1 || epochs < 1) {
+            throw heap RsException("CoClustering: cluster counts and "
+                + "epochs must be >= 1");
+        }
+        this.kU = userClusters;
+        this.kI = itemClusters;
+        this.epochs = epochs;
+        this.seed = seed;
+        this.fitted = false;
+        return;
+    }
+
+    public void fit(Interactions m) {
+        this.mu = Baselines.observedMean(m);
+        this.lo = m.minRating();
+        this.hi = m.maxRating();
+        this.nU = m.userCount();
+        this.nI = m.itemCount();
+
+        float64[] um = heap float64[this.nU];
+        int64 u = 0;
+        while (u < this.nU) {
+            float64 acc = 0.0;
+            int64 t = 0;
+            while (t < m.userNnz(u)) {
+                acc = acc + m.userRatingAt(u, t);
+                t = t + 1;
+            }
+            um[u] = acc / (float64) m.userNnz(u);
+            u = u + 1;
+        }
+        float64[] im = heap float64[this.nI];
+        int64 i = 0;
+        while (i < this.nI) {
+            float64 acc = 0.0;
+            int64 t = 0;
+            while (t < m.itemNnz(i)) {
+                acc = acc + m.itemRatingAt(i, t);
+                t = t + 1;
+            }
+            im[i] = acc / (float64) m.itemNnz(i);
+            i = i + 1;
+        }
+        this.uMean #= um;
+        this.iMean #= im;
+
+        Generator g = heap Generator(this.seed);
+        Tensor<int64> ru = g.integers((int64) 0, this.kU, this.nU);
+        Tensor<int64> ri = g.integers((int64) 0, this.kI, this.nI);
+        int64[] cu = heap int64[this.nU];
+        int64[] ci = heap int64[this.nI];
+        u = 0;
+        while (u < this.nU) { cu[u] = ru.flatGet(u); u = u + 1; }
+        i = 0;
+        while (i < this.nI) { ci[i] = ri.flatGet(i); i = i + 1; }
+        this.cu #= cu;
+        this.ci #= ci;
+
+        int64 e = 0;
+        while (e < this.epochs) {
+            this.computeAvgs(m);
+            // Reassign users to the error-minimizing cluster.
+            u = 0;
+            while (u < this.nU) {
+                int64 best = 0;
+                float64 bestErr = 0.0;
+                int64 gc = 0;
+                while (gc < this.kU) {
+                    float64 err = 0.0;
+                    int64 t = 0;
+                    while (t < m.userNnz(u)) {
+                        int64 it = m.userItemAt(u, t);
+                        float64 r = m.userRatingAt(u, t);
+                        float64 est = this.estKnown(u, it, gc,
+                                                    this.ci[it]);
+                        err = err + (r - est) * (r - est);
+                        t = t + 1;
+                    }
+                    if (gc == 0 || err < bestErr) {
+                        bestErr = err;
+                        best = gc;
+                    }
+                    gc = gc + 1;
+                }
+                this.cu[u] = best;
+                u = u + 1;
+            }
+            // Then items.
+            i = 0;
+            while (i < this.nI) {
+                int64 best = 0;
+                float64 bestErr = 0.0;
+                int64 hc = 0;
+                while (hc < this.kI) {
+                    float64 err = 0.0;
+                    int64 t = 0;
+                    while (t < m.itemNnz(i)) {
+                        int64 uu = m.itemUserAt(i, t);
+                        float64 r = m.itemRatingAt(i, t);
+                        float64 est = this.estKnown(uu, i, this.cu[uu],
+                                                    hc);
+                        err = err + (r - est) * (r - est);
+                        t = t + 1;
+                    }
+                    if (hc == 0 || err < bestErr) {
+                        bestErr = err;
+                        best = hc;
+                    }
+                    hc = hc + 1;
+                }
+                this.ci[i] = best;
+                i = i + 1;
+            }
+            e = e + 1;
+        }
+        this.computeAvgs(m);
+        this.fitted = true;
+        return;
+    }
+
+    /** Cluster and co-cluster means; EMPTY ones take the global mean. */
+    void computeAvgs(Interactions m) {
+        float64[] sU = heap float64[this.kU];
+        int64[] nUc = heap int64[this.kU];
+        float64[] sI = heap float64[this.kI];
+        int64[] nIc = heap int64[this.kI];
+        float64[] sC = heap float64[this.kU * this.kI];
+        int64[] nC = heap int64[this.kU * this.kI];
+        int64 u = 0;
+        while (u < this.nU) {
+            int64 t = 0;
+            while (t < m.userNnz(u)) {
+                int64 i = m.userItemAt(u, t);
+                float64 r = m.userRatingAt(u, t);
+                int64 gc = this.cu[u];
+                int64 hc = this.ci[i];
+                sU[gc] = sU[gc] + r;
+                nUc[gc] = nUc[gc] + 1;
+                sI[hc] = sI[hc] + r;
+                nIc[hc] = nIc[hc] + 1;
+                sC[gc * this.kI + hc] = sC[gc * this.kI + hc] + r;
+                nC[gc * this.kI + hc] = nC[gc * this.kI + hc] + 1;
+                t = t + 1;
+            }
+            u = u + 1;
+        }
+        float64[] aU = heap float64[this.kU];
+        int64 gc = 0;
+        while (gc < this.kU) {
+            if (nUc[gc] > 0) { aU[gc] = sU[gc] / (float64) nUc[gc]; }
+            else { aU[gc] = this.mu; }
+            gc = gc + 1;
+        }
+        float64[] aI = heap float64[this.kI];
+        int64 hc = 0;
+        while (hc < this.kI) {
+            if (nIc[hc] > 0) { aI[hc] = sI[hc] / (float64) nIc[hc]; }
+            else { aI[hc] = this.mu; }
+            hc = hc + 1;
+        }
+        float64[] aC = heap float64[this.kU * this.kI];
+        int64 c = 0;
+        while (c < this.kU * this.kI) {
+            if (nC[c] > 0) { aC[c] = sC[c] / (float64) nC[c]; }
+            else { aC[c] = this.mu; }
+            c = c + 1;
+        }
+        this.aU #= aU;
+        this.aI #= aI;
+        this.aC #= aC;
+        return;
+    }
+
+    float64 estKnown(int64 u, int64 i, int64 gc, int64 hc) {
+        return this.aC[gc * this.kI + hc]
+            + (this.uMean[u] - this.aU[gc])
+            + (this.iMean[i] - this.aI[hc]);
+    }
+
+    public float64 predict(int64 u, int64 i) {
+        if (!this.fitted) {
+            throw heap RsException("CoClustering: predict before fit");
+        }
+        boolean ku = u >= 0 && u < this.nU;
+        boolean ki = i >= 0 && i < this.nI;
+        if (ku && ki) {
+            return this.clip(this.estKnown(u, i, this.cu[u], this.ci[i]));
+        }
+        if (ki) { return this.clip(this.iMean[i]); }   // unknown user
+        if (ku) { return this.clip(this.uMean[u]); }   // unknown item
+        return this.clip(this.mu);                     // both unknown
+    }
+
+    /** The fitted cluster of user `u` (§6.2 — counts are honoured). */
+    public int64 userCluster(int64 u) {
+        this.checkFit();
+        return this.cu[u];
+    }
+
+    /** The fitted cluster of item `i`. */
+    public int64 itemCluster(int64 i) {
+        this.checkFit();
+        return this.ci[i];
+    }
+
+    float64 clip(float64 v) {
+        if (v < this.lo) { return this.lo; }
+        if (v > this.hi) { return this.hi; }
+        return v;
+    }
+
+    void checkFit() {
+        if (!this.fitted) {
+            throw heap RsException("CoClustering: not fitted yet");
+        }
+        return;
+    }
+}

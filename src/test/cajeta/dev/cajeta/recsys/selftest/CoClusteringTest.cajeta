@@ -1,0 +1,152 @@
+package dev.cajeta.recsys.selftest;
+
+import dev.cajeta.unit.Assert;
+import cajeta.math.Tensor;
+import dev.cajeta.recsys.Baselines;
+import dev.cajeta.recsys.CoClustering;
+import dev.cajeta.recsys.GlobalMean;
+import dev.cajeta.recsys.Interactions;
+import dev.cajeta.recsys.ItemMean;
+import dev.cajeta.recsys.RatingScore;
+import dev.cajeta.recsys.UserMean;
+
+/**
+ * ml-recsys U5 — co-clustering: simultaneous clustering with the
+ * co-cluster prediction rule (5.1.1), honoured counts + seeded
+ * reproducibility (5.1.2), the documented empty/unknown fallback chain
+ * (5.1.3), and Surprise `CoClustering` RMSE-level parity (5.1.4).
+ */
+public class CoClusteringTest {
+
+    public CoClusteringTest() { return; }
+
+    // A 6×6 block matrix with the symmetry BROKEN (a perfectly
+    // symmetric one has every user mean equal, all clusters tie, and
+    // argmin collapses — for Surprise just as for us): users {0,1,2}
+    // rate their block 5 and the other 2; users {3,4,5} rate theirs 4
+    // and the other 1. Exact co-clustering gives exact block values.
+    static #Interactions blocks() {
+        int64 n = 36;
+        String[] us = heap String[n];
+        String[] is = heap String[n];
+        float64[] rs = heap float64[n];
+        int64 t = 0;
+        int64 u = 0;
+        while (u < 6) {
+            int64 i = 0;
+            while (i < 6) {
+                us[t] = "u" + u;
+                is[t] = "i" + i;
+                boolean sameSide = (u < 3) == (i < 3);
+                if (sameSide) {
+                    if (u < 3) { rs[t] = 5.0; } else { rs[t] = 4.0; }
+                } else {
+                    if (u < 3) { rs[t] = 2.0; } else { rs[t] = 1.0; }
+                }
+                t = t + 1;
+                i = i + 1;
+            }
+            u = u + 1;
+        }
+        return Interactions.of(us, is, rs);
+    }
+
+    // 5.1.1 + 5.1.2 — the block structure is recovered: same-side users
+    // share a cluster, and every prediction reproduces its block value.
+    @Test
+    public void simultaneousClusteringRecoversBlocks() {
+        Interactions m = CoClusteringTest.blocks();
+        CoClustering c = heap CoClustering((int64) 2, (int64) 2,
+            (int64) 20, (uint64) 7);
+        c.fit(m);
+        Assert.equals(c.userCluster((int64) 0), c.userCluster((int64) 1));
+        Assert.equals(c.userCluster((int64) 0), c.userCluster((int64) 2));
+        Assert.isTrue(c.userCluster((int64) 0) != c.userCluster((int64) 3));
+        Assert.equals(c.itemCluster((int64) 0), c.itemCluster((int64) 2));
+        Assert.isTrue(c.itemCluster((int64) 0) != c.itemCluster((int64) 4));
+        int64 u = 0;
+        while (u < 6) {
+            int64 i = 0;
+            while (i < 6) {
+                float64 want;
+                if ((u < 3) == (i < 3)) {
+                    if (u < 3) { want = 5.0; } else { want = 4.0; }
+                } else {
+                    if (u < 3) { want = 2.0; } else { want = 1.0; }
+                }
+                Assert.isTrue(Fx.close(c.predict(u, i), want, 0.0000001));
+                i = i + 1;
+            }
+            u = u + 1;
+        }
+        // Counts honoured; a same-seed refit is bit-identical (§12.5).
+        Assert.isTrue(c.userCluster((int64) 5) >= 0
+            && c.userCluster((int64) 5) < 2);
+        CoClustering c2 = heap CoClustering((int64) 2, (int64) 2,
+            (int64) 20, (uint64) 7);
+        c2.fit(m);
+        u = 0;
+        while (u < 6) {
+            int64 i = 0;
+            while (i < 6) {
+                Assert.equals(Cajeta.f64ToBits(c2.predict(u, i)),
+                    Cajeta.f64ToBits(c.predict(u, i)));
+                i = i + 1;
+            }
+            u = u + 1;
+        }
+        return;
+    }
+
+    // 5.1.3 — the fallback chain in §6.3's documented order: unknown
+    // user → item mean; unknown item → user mean; both → global mean.
+    @Test
+    public void fallbackChainIsDocumented() {
+        Interactions m = KnnTest.load("rs_knn_train");
+        CoClustering c = heap CoClustering((int64) 3, (int64) 3,
+            (int64) 20, (uint64) 7);
+        c.fit(m);
+        ItemMean im = Baselines.itemMean();
+        im.fit(m);
+        UserMean um = Baselines.userMean();
+        um.fit(m);
+        GlobalMean g = Baselines.globalMean();
+        g.fit(m);
+        Assert.isTrue(Fx.close(c.predict((int64) -1, (int64) 4),
+            im.predict((int64) 0, (int64) 4), 0.0000000001));
+        Assert.isTrue(Fx.close(c.predict((int64) 4, (int64) -1),
+            um.predict((int64) 4, (int64) 0), 0.0000000001));
+        Assert.isTrue(Fx.close(c.predict((int64) -1, (int64) -1),
+            g.predict((int64) 0, (int64) 0), 0.0000000001));
+        return;
+    }
+
+    // 5.1.4 — Surprise parity at the RMSE level on the shared split
+    // (bitwise impossible across RNGs — recorded), and §12.2: reported
+    // against the baseline.
+    @Test
+    public void tracksSurpriseRmse() {
+        Interactions m = KnnTest.load("rs_knn_train");
+        Tensor<float64> tr = Fx.load("rs_knn_test_r");
+        int64 n = tr.shapeAt(0);
+        int64[] us = KnnTest.mapUsers(m, "rs_knn_test");
+        int64[] is = KnnTest.mapItems(m, "rs_knn_test");
+        float64[] rs = heap float64[n];
+        int64 t = 0;
+        while (t < n) { rs[t] = tr.flatGet(t); t = t + 1; }
+        CoClustering c = heap CoClustering((int64) 3, (int64) 3,
+            (int64) 20, (uint64) 7);
+        c.fit(m);
+        float64 mine = RatingScore.rmse(c, us, is, rs);
+        float64 surprise = Fx.load("rs_cc_rmse").flatGet((int64) 0);
+        GlobalMean g = Baselines.globalMean();
+        g.fit(m);
+        float64 base = RatingScore.rmse(g, us, is, rs);
+        System.stdout.println("cocluster rmse: mine=" + mine
+            + " surprise=" + surprise + " global=" + base);
+        float64 d = mine - surprise;
+        if (d < 0.0) { d = -d; }
+        Assert.isTrue(d < 0.15);
+        return;
+    }
+}

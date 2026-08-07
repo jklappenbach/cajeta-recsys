@@ -262,12 +262,36 @@ def gen_mf():
     save("rs_svd_rmse", [rmse])
 
 
+def gen_cocluster():
+    """U5 — Surprise CoClustering(3,3), 20 epochs: RMSE-level pin on the
+    shared split (init randomness is numpy's, so bitwise parity is
+    impossible — the 11.3 judgement again)."""
+    from surprise import CoClustering
+
+    tu = np.load(f"{OUT}/rs_knn_train_u.npy")
+    ti = np.load(f"{OUT}/rs_knn_train_i.npy")
+    tr = np.load(f"{OUT}/rs_knn_train_r.npy")
+    vu = np.load(f"{OUT}/rs_knn_test_u.npy")
+    vi = np.load(f"{OUT}/rs_knn_test_i.npy")
+    vr = np.load(f"{OUT}/rs_knn_test_r.npy")
+    ts = surprise_trainset(tu, ti, tr)
+    algo = CoClustering(n_cltr_u=3, n_cltr_i=3, n_epochs=20,
+                        random_state=7, verbose=False)
+    algo.fit(ts)
+    est = np.array([algo.predict(str(int(u)), str(int(i))).est
+                    for u, i in zip(vu, vi)])
+    rmse = float(np.sqrt(np.mean((est - vr) ** 2)))
+    print(f"  [check] surprise CoClustering held-out rmse {rmse:.4f}")
+    save("rs_cc_rmse", [rmse])
+
+
 def main():
     print(f"surprise {surprise.__version__} / sklearn {sklearn.__version__} "
           f"fixtures -> {OUT}")
     gen_baselines()
     gen_knn()
     gen_mf()
+    gen_cocluster()
 
 
 if __name__ == "__main__":
