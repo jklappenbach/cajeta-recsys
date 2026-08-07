@@ -1,0 +1,446 @@
+package dev.cajeta.recsys;
+
+import cajeta.collection.HashMap;
+import cajeta.lang.Int64;
+import cajeta.math.Tensor;
+import cajeta.nucleo.frame.Table;
+import cajeta.nucleo.sparse.CsrMatrix;
+
+/**
+ * The user-item interaction matrix (spec §2): rows are users, columns
+ * are items, cells are ratings, and **most cells are MISSING — which is
+ * not zero** (§12.1). The invariant is structural, not remembered:
+ * presence and value are separate concepts. {@link #has} answers
+ * presence; {@link #rating} answers value and THROWS on a missing cell;
+ * {@link #ratingOr} requires the caller to name their fill; and
+ * {@link #toDense} has no fill-free overload, because the silent-zero
+ * default IS the defining bug of this domain.
+ *
+ * Storage: private CSR (by user, items ascending) + CSC (by item) index
+ * mirrors — both sides iterate in O(nnz). {@link #toCsr} bridges to
+ * `cajeta.nucleo.sparse.CsrMatrix` for the linalg paths, with the
+ * zero-slot caveat documented at that call site.
+ *
+ * External ids (§2.4): arbitrary strings map to contiguous indices in
+ * FIRST-APPEARANCE order and map back exactly. Duplicate (user, item)
+ * pairs are rejected loudly — last-write-wins would hide data bugs.
+ */
+public final class Interactions {
+
+    // CSR (user-major).
+    int64[] uPtr;        // [nU + 1]
+    int64[] uItems;      // [nnz] ascending within a user
+    float64[] uVals;     // [nnz]
+    // CSC (item-major) mirror.
+    int64[] iPtr;        // [nI + 1]
+    int64[] iUsers;      // [nnz] ascending within an item
+    float64[] iVals;     // [nnz]
+
+    int64 nU;
+    int64 nI;
+    int64 nnzCount;
+    String[] userIds;    // index → external id
+    String[] itemIds;
+    HashMap<String, Int64> userIdx;
+    HashMap<String, Int64> itemIdx;
+    float64 minR;
+    float64 maxR;
+
+    Interactions(#int64[] uPtr, #int64[] uItems, #float64[] uVals,
+                 #int64[] iPtr, #int64[] iUsers, #float64[] iVals,
+                 int64 nU, int64 nI, int64 nnz,
+                 #String[] userIds, #String[] itemIds,
+                 #HashMap<String, Int64> userIdx,
+                 #HashMap<String, Int64> itemIdx,
+                 float64 minR, float64 maxR) {
+        this.uPtr #= uPtr;
+        this.uItems #= uItems;
+        this.uVals #= uVals;
+        this.iPtr #= iPtr;
+        this.iUsers #= iUsers;
+        this.iVals #= iVals;
+        this.nU = nU;
+        this.nI = nI;
+        this.nnzCount = nnz;
+        this.userIds #= userIds;
+        this.itemIds #= itemIds;
+        this.userIdx #= userIdx;
+        this.itemIdx #= itemIdx;
+        this.minR = minR;
+        this.maxR = maxR;
+        return;
+    }
+
+    /** Build from (user, item, rating) triples with string ids (§2.1). */
+    public static #Interactions of(String[] users, String[] items,
+                                   float64[] ratings) {
+        int64 n = (int64) ratings.count();
+        if ((int64) users.count() != n || (int64) items.count() != n) {
+            throw heap RsException("Interactions: users/items/ratings "
+                + "lengths differ (" + (int64) users.count() + "/"
+                + (int64) items.count() + "/" + n + ")");
+        }
+        if (n < 1) {
+            throw heap RsException("Interactions: at least one "
+                + "interaction is required");
+        }
+        // Map external ids to contiguous indices, first-appearance order.
+        HashMap<String, Int64> um = heap HashMap<String, Int64>();
+        HashMap<String, Int64> im = heap HashMap<String, Int64>();
+        int64[] uIx = heap int64[n];
+        int64[] iIx = heap int64[n];
+        int64 nU = 0;
+        int64 nI = 0;
+        int64 t = 0;
+        while (t < n) {
+            float64 r = ratings[t];
+            if (r != r) {
+                throw heap RsException("Interactions: rating at triple " + t
+                    + " is NaN — a missing rating is an ABSENT triple, "
+                    + "never a NaN cell");
+            }
+            Int64 uu = um.get(users[t]);
+            if (uu == null) {
+                String uk = "" + users[t];
+                um.put(#uk, Int64.of(nU));
+                uIx[t] = nU;
+                nU = nU + 1;
+            } else {
+                uIx[t] = uu.value();
+            }
+            Int64 ii = im.get(items[t]);
+            if (ii == null) {
+                String ik = "" + items[t];
+                im.put(#ik, Int64.of(nI));
+                iIx[t] = nI;
+                nI = nI + 1;
+            } else {
+                iIx[t] = ii.value();
+            }
+            t = t + 1;
+        }
+        String[] uid = heap String[nU];
+        String[] iid = heap String[nI];
+        t = 0;
+        while (t < n) {
+            if (uid[uIx[t]] == null) { uid[uIx[t]] = "" + users[t]; }
+            if (iid[iIx[t]] == null) { iid[iIx[t]] = "" + items[t]; }
+            t = t + 1;
+        }
+        return Interactions.build(uIx, iIx, ratings, n, nU, nI,
+                                  #uid, #iid, #um, #im);
+    }
+
+    /**
+     * Build from a frame (§1.1.6): string user/item columns and a
+     * float64 rating column.
+     */
+    public static #Interactions fromTable<R>(Table<R> t, String userCol,
+                                             String itemCol,
+                                             String ratingCol) {
+        int64 rows = t.rowCount();
+        String[] us = heap String[rows];
+        String[] is = heap String[rows];
+        float64[] rs = heap float64[rows];
+        int64 r = 0;
+        while (r < rows) {
+            us[r] = t.strAt(userCol, r);
+            is[r] = t.strAt(itemCol, r);
+            rs[r] = t.f64At(ratingCol, r);
+            r = r + 1;
+        }
+        return Interactions.of(us, is, rs);
+    }
+
+    static #Interactions build(int64[] uIx, int64[] iIx, float64[] ratings,
+                               int64 n, int64 nU, int64 nI,
+                               #String[] uid, #String[] iid,
+                               #HashMap<String, Int64> um,
+                               #HashMap<String, Int64> im) {
+        // CSR by user, items ascending; duplicates rejected.
+        int64[] uPtr = heap int64[nU + 1];
+        int64 t = 0;
+        while (t < n) {
+            uPtr[uIx[t] + 1] = uPtr[uIx[t] + 1] + 1;
+            t = t + 1;
+        }
+        int64 u = 0;
+        while (u < nU) { uPtr[u + 1] = uPtr[u + 1] + uPtr[u]; u = u + 1; }
+        int64[] uItems = heap int64[n];
+        float64[] uVals = heap float64[n];
+        int64[] cursor = heap int64[nU];
+        t = 0;
+        while (t < n) {
+            int64 uu = uIx[t];
+            int64 pos = uPtr[uu] + cursor[uu];
+            uItems[pos] = iIx[t];
+            uVals[pos] = ratings[t];
+            cursor[uu] = cursor[uu] + 1;
+            t = t + 1;
+        }
+        // Sort each user's slice by item (insertion sort — rows are short),
+        // and reject duplicates.
+        float64 minR = ratings[0];
+        float64 maxR = ratings[0];
+        t = 0;
+        while (t < n) {
+            if (ratings[t] < minR) { minR = ratings[t]; }
+            if (ratings[t] > maxR) { maxR = ratings[t]; }
+            t = t + 1;
+        }
+        u = 0;
+        while (u < nU) {
+            int64 lo = uPtr[u];
+            int64 hi = uPtr[u + 1];
+            int64 a = lo + 1;
+            while (a < hi) {
+                int64 ci = uItems[a];
+                float64 cv = uVals[a];
+                int64 b = a - 1;
+                while (b >= lo && uItems[b] > ci) {
+                    uItems[b + 1] = uItems[b];
+                    uVals[b + 1] = uVals[b];
+                    b = b - 1;
+                }
+                uItems[b + 1] = ci;
+                uVals[b + 1] = cv;
+                a = a + 1;
+            }
+            a = lo + 1;
+            while (a < hi) {
+                if (uItems[a] == uItems[a - 1]) {
+                    throw heap RsException("Interactions: duplicate "
+                        + "(user, item) pair at user index " + u
+                        + ", item index " + uItems[a] + " — resolve "
+                        + "duplicates upstream; last-write-wins would "
+                        + "hide a data bug");
+                }
+                a = a + 1;
+            }
+            u = u + 1;
+        }
+        // CSC mirror.
+        int64[] iPtr = heap int64[nI + 1];
+        t = 0;
+        while (t < n) {
+            iPtr[uItems[t] + 1] = iPtr[uItems[t] + 1] + 1;
+            t = t + 1;
+        }
+        int64 i2 = 0;
+        while (i2 < nI) { iPtr[i2 + 1] = iPtr[i2 + 1] + iPtr[i2]; i2 = i2 + 1; }
+        int64[] iUsers = heap int64[n];
+        float64[] iVals = heap float64[n];
+        int64[] cur2 = heap int64[nI];
+        u = 0;
+        while (u < nU) {
+            int64 p = uPtr[u];
+            while (p < uPtr[u + 1]) {
+                int64 it = uItems[p];
+                int64 pos = iPtr[it] + cur2[it];
+                iUsers[pos] = u;
+                iVals[pos] = uVals[p];
+                cur2[it] = cur2[it] + 1;
+                p = p + 1;
+            }
+            u = u + 1;
+        }
+        Interactions m = heap Interactions(#uPtr, #uItems, #uVals,
+            #iPtr, #iUsers, #iVals, nU, nI, n, #uid, #iid, #um, #im,
+            minR, maxR);
+        return #m;
+    }
+
+    /** Number of distinct users. */
+    public int64 userCount() { return this.nU; }
+
+    /** Number of distinct items. */
+    public int64 itemCount() { return this.nI; }
+
+    /** Number of observed interactions. */
+    public int64 count() { return this.nnzCount; }
+
+    /** Observed fraction of the full matrix (§2.3). */
+    public float64 density() {
+        return (float64) this.nnzCount
+            / ((float64) this.nU * (float64) this.nI);
+    }
+
+    /** The smallest observed rating (the scale is the data's, §5.7). */
+    public float64 minRating() { return this.minR; }
+
+    /** The largest observed rating. */
+    public float64 maxRating() { return this.maxR; }
+
+    /** True when user `u` rated item `i` — presence, not value (§2.2). */
+    public boolean has(int64 u, int64 i) {
+        return this.find(u, i) >= 0;
+    }
+
+    /**
+     * The rating user `u` gave item `i`. THROWS on a missing cell —
+     * "no interaction" is an explicit answer, never a silent 0.0 (§2.2).
+     */
+    public float64 rating(int64 u, int64 i) {
+        int64 p = this.find(u, i);
+        if (p < 0) {
+            throw heap RsException("Interactions: user " + u + " has no "
+                + "interaction with item " + i + " — check has(u,i) or "
+                + "name a fill with ratingOr(u,i,fill)");
+        }
+        return this.uVals[p];
+    }
+
+    /** The rating, or the CALLER-NAMED `fill` when missing. */
+    public float64 ratingOr(int64 u, int64 i, float64 fill) {
+        int64 p = this.find(u, i);
+        if (p < 0) { return fill; }
+        return this.uVals[p];
+    }
+
+    /** How many items user `u` rated. */
+    public int64 userNnz(int64 u) {
+        this.checkU(u);
+        return this.uPtr[u + 1] - this.uPtr[u];
+    }
+
+    /** The `k`-th item index user `u` rated (ascending by item). */
+    public int64 userItemAt(int64 u, int64 k) {
+        this.checkU(u);
+        return this.uItems[this.uPtr[u] + k];
+    }
+
+    /** The `k`-th rating of user `u` (aligned with userItemAt). */
+    public float64 userRatingAt(int64 u, int64 k) {
+        this.checkU(u);
+        return this.uVals[this.uPtr[u] + k];
+    }
+
+    /** How many users rated item `i`. */
+    public int64 itemNnz(int64 i) {
+        this.checkI(i);
+        return this.iPtr[i + 1] - this.iPtr[i];
+    }
+
+    /** The `k`-th user index who rated item `i` (ascending by user). */
+    public int64 itemUserAt(int64 i, int64 k) {
+        this.checkI(i);
+        return this.iUsers[this.iPtr[i] + k];
+    }
+
+    /** The `k`-th rating of item `i` (aligned with itemUserAt). */
+    public float64 itemRatingAt(int64 i, int64 k) {
+        this.checkI(i);
+        return this.iVals[this.iPtr[i] + k];
+    }
+
+    /** Contiguous index of an external user id, or −1 (§2.4). */
+    public int64 userIndex(String id) {
+        Int64 v = this.userIdx.get(id);
+        if (v == null) { return -1; }
+        return v.value();
+    }
+
+    /** Contiguous index of an external item id, or −1. */
+    public int64 itemIndex(String id) {
+        Int64 v = this.itemIdx.get(id);
+        if (v == null) { return -1; }
+        return v.value();
+    }
+
+    /** The external id of user index `u` — identity round-trips. */
+    public #String userId(int64 u) {
+        this.checkU(u);
+        String out = "" + this.userIds[u];
+        return #out;
+    }
+
+    /** The external id of item index `i`. */
+    public #String itemId(int64 i) {
+        this.checkI(i);
+        String out = "" + this.itemIds[i];
+        return #out;
+    }
+
+    /**
+     * Densify with an EXPLICIT fill for the missing cells (§1.1.2).
+     * There is deliberately no fill-free overload: "defaults to zero"
+     * is the bug this type exists to prevent.
+     */
+    public #Tensor<float64> toDense(float64 fill) {
+        int64 sz = this.nU * this.nI;
+        float64[] a = heap float64[sz];
+        int64 t = 0;
+        while (t < sz) { a[t] = fill; t = t + 1; }
+        int64 u = 0;
+        while (u < this.nU) {
+            int64 p = this.uPtr[u];
+            while (p < this.uPtr[u + 1]) {
+                a[u * this.nI + this.uItems[p]] = this.uVals[p];
+                p = p + 1;
+            }
+            u = u + 1;
+        }
+        int64[] sh = heap int64[2]; sh[0] = this.nU; sh[1] = this.nI;
+        return Tensor.of<float64>(a, sh);
+    }
+
+    /**
+     * Bridge to `CsrMatrix` for the linalg paths. NOTE: a CSR slot holds
+     * the rating VALUE and an absent slot reads as 0.0 under CSR
+     * semantics — this is exactly the zero-filled view §5.0 names, so
+     * only the explicitly zero-filling estimators may consume it.
+     */
+    public #CsrMatrix toCsr() {
+        int64[] rows = heap int64[this.nnzCount];
+        int64[] cols = heap int64[this.nnzCount];
+        float64[] vals = heap float64[this.nnzCount];
+        int64 t = 0;
+        int64 u = 0;
+        while (u < this.nU) {
+            int64 p = this.uPtr[u];
+            while (p < this.uPtr[u + 1]) {
+                rows[t] = u;
+                cols[t] = this.uItems[p];
+                vals[t] = this.uVals[p];
+                t = t + 1;
+                p = p + 1;
+            }
+            u = u + 1;
+        }
+        return CsrMatrix.fromCoo(rows, cols, vals, this.nnzCount,
+                                 this.nU, this.nI);
+    }
+
+    // -- internals ---------------------------------------------------------
+
+    /** CSR position of (u, i), or −1 (binary search in the user row). */
+    int64 find(int64 u, int64 i) {
+        this.checkU(u);
+        this.checkI(i);
+        int64 lo = this.uPtr[u];
+        int64 hi = this.uPtr[u + 1] - 1;
+        while (lo <= hi) {
+            int64 mid = (lo + hi) / 2;
+            if (this.uItems[mid] == i) { return mid; }
+            if (this.uItems[mid] < i) { lo = mid + 1; }
+            else { hi = mid - 1; }
+        }
+        return -1;
+    }
+
+    void checkU(int64 u) {
+        if (u < 0 || u >= this.nU) {
+            throw heap RsException("Interactions: user index " + u
+                + " out of range [0, " + this.nU + ")");
+        }
+        return;
+    }
+
+    void checkI(int64 i) {
+        if (i < 0 || i >= this.nI) {
+            throw heap RsException("Interactions: item index " + i
+                + " out of range [0, " + this.nI + ")");
+        }
+        return;
+    }
+}

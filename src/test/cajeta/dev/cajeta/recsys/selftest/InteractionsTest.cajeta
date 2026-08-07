@@ -1,0 +1,174 @@
+package dev.cajeta.recsys.selftest;
+
+import dev.cajeta.unit.Assert;
+import cajeta.math.Tensor;
+import cajeta.nucleo.column.StringColumn;
+import cajeta.nucleo.column.Column;
+import cajeta.nucleo.frame.Table;
+import cajeta.nucleo.sparse.CsrMatrix;
+import dev.cajeta.recsys.Interactions;
+import dev.cajeta.recsys.RsException;
+
+/**
+ * ml-recsys U1 — the interaction matrix, and §12.1 FIRST: a rating of 0
+ * and no rating never compare equal, at every accessor (1.1.1), dense
+ * conversion demands an explicit fill (1.1.2), density reports the
+ * observed fraction (1.1.3), external ids round-trip (1.1.4), unseen
+ * ids answer with the documented −1 policy (1.1.5), and construction
+ * works from triples and from a frame (1.1.6).
+ */
+public class InteractionsTest {
+
+    public InteractionsTest() { return; }
+
+    // A 2×3 fixture whose whole point is the EXPLICIT 0.0 rating:
+    //          x       y      z
+    //   A     0.0     3.0     —
+    //   B      —      4.0    2.0
+    static #Interactions fixture() {
+        String[] us = heap String[4];
+        String[] is = heap String[4];
+        float64[] rs = heap float64[4];
+        us[0] = "A"; is[0] = "x"; rs[0] = 0.0;
+        us[1] = "A"; is[1] = "y"; rs[1] = 3.0;
+        us[2] = "B"; is[2] = "y"; rs[2] = 4.0;
+        us[3] = "B"; is[3] = "z"; rs[3] = 2.0;
+        return Interactions.of(us, is, rs);
+    }
+
+    // 1.1.1 + §12.1 — zero and missing are distinguishable at EVERY
+    // accessor: get, iterate (both orientations), and densification.
+    @Test
+    public void missingIsNeverZero() {
+        Interactions m = InteractionsTest.fixture();
+        Assert.equals(m.userCount(), (int64) 2);
+        Assert.equals(m.itemCount(), (int64) 3);
+        Assert.equals(m.count(), (int64) 4);
+
+        // get: the 0.0 rating IS a rating; the missing cell THROWS.
+        Assert.isTrue(m.has((int64) 0, (int64) 0));
+        Assert.isTrue(m.rating((int64) 0, (int64) 0) == 0.0);
+        Assert.isTrue(!m.has((int64) 0, (int64) 2));
+        boolean threw = false;
+        try {
+            float64 v = m.rating((int64) 0, (int64) 2);
+        } catch (RsException ex) { threw = true; }
+        Assert.isTrue(threw);
+        // The caller names their fill; the fill is not silently 0.
+        Assert.isTrue(m.ratingOr((int64) 0, (int64) 2, -7.0) == -7.0);
+
+        // Iterate by user: A rated exactly {x, y} — z never appears.
+        Assert.equals(m.userNnz((int64) 0), (int64) 2);
+        Assert.equals(m.userItemAt((int64) 0, (int64) 0), (int64) 0);
+        Assert.isTrue(m.userRatingAt((int64) 0, (int64) 0) == 0.0);
+        Assert.equals(m.userItemAt((int64) 0, (int64) 1), (int64) 1);
+
+        // Iterate by item: y was rated by both, x only by A.
+        Assert.equals(m.itemNnz((int64) 1), (int64) 2);
+        Assert.equals(m.itemNnz((int64) 0), (int64) 1);
+        Assert.isTrue(m.itemRatingAt((int64) 0, (int64) 0) == 0.0);
+
+        // Densify: the missing cells carry the NAMED fill; the explicit
+        // 0.0 rating stays 0.0 — the two are distinguishable in the
+        // dense view too.
+        Tensor<float64> d = m.toDense(-999.0);
+        Assert.isTrue(d.flatGet((int64) 0) == 0.0);      // A,x rated 0.0
+        Assert.isTrue(d.flatGet((int64) 2) == -999.0);   // A,z missing
+        Assert.isTrue(d.flatGet((int64) 3) == -999.0);   // B,x missing
+        Assert.isTrue(d.flatGet((int64) 5) == 2.0);      // B,z rated
+        return;
+    }
+
+    // 1.1.3 — density is the observed fraction.
+    @Test
+    public void densityIsObservedFraction() {
+        Interactions m = InteractionsTest.fixture();
+        Assert.isTrue(Fx.close(m.density(), 4.0 / 6.0, 0.000000000001));
+        Assert.isTrue(m.minRating() == 0.0);
+        Assert.isTrue(m.maxRating() == 4.0);
+        return;
+    }
+
+    // 1.1.4 + 1.1.5 — external ids map to contiguous indices and back;
+    // an unseen id answers −1 (the documented cold-start policy: the
+    // caller falls back to a §3 baseline, no exception surprise).
+    @Test
+    public void identityRoundTripsAndColdStartPolicy() {
+        Interactions m = InteractionsTest.fixture();
+        Assert.equals(m.userIndex("A"), (int64) 0);
+        Assert.equals(m.userIndex("B"), (int64) 1);
+        Assert.isTrue(m.userId((int64) 1).equals("B"));
+        Assert.equals(m.itemIndex("z"), (int64) 2);
+        Assert.isTrue(m.itemId((int64) 2).equals("z"));
+        Assert.equals(m.userIndex("nobody"), (int64) -1);
+        Assert.equals(m.itemIndex("nothing"), (int64) -1);
+        return;
+    }
+
+    // 1.1.6 — construction from a frame gives the same matrix as from
+    // triples; the CsrMatrix bridge is the documented zero-slot view.
+    @Test
+    public void frameConstructionAndCsrBridge() {
+        String[] us = heap String[4];
+        String[] is = heap String[4];
+        float64[] rs = heap float64[4];
+        us[0] = "A"; is[0] = "x"; rs[0] = 0.0;
+        us[1] = "A"; is[1] = "y"; rs[1] = 3.0;
+        us[2] = "B"; is[2] = "y"; rs[2] = 4.0;
+        us[3] = "B"; is[3] = "z"; rs[3] = 2.0;
+        Table<RsRow> t = heap Table<RsRow>(StringColumn.of(us),
+            StringColumn.of(is), Column.of<float64>(rs));
+        Interactions m = Interactions.fromTable<RsRow>(t, "user", "item",
+                                                       "rating");
+        Assert.equals(m.count(), (int64) 4);
+        Assert.isTrue(m.rating((int64) 1, (int64) 2) == 2.0);
+
+        CsrMatrix c = m.toCsr();
+        Assert.equals(c.rowCount(), (int64) 2);
+        Assert.equals(c.nnz(), (int64) 4);
+        // The bridge is the ZERO-FILLED view: its dense form equals
+        // toDense(0.0) — and therefore is NOT the honest view, which is
+        // exactly what its documentation warns.
+        Tensor<float64> dc = c.toDense();
+        Tensor<float64> d0 = m.toDense(0.0);
+        int64 i = 0;
+        while (i < 6) {
+            Assert.equals(Cajeta.f64ToBits(dc.flatGet(i)),
+                Cajeta.f64ToBits(d0.flatGet(i)));
+            i = i + 1;
+        }
+        return;
+    }
+
+    // Misuse is loud: duplicates, NaN ratings, mismatched lengths.
+    @Test
+    public void misuseIsLoud() {
+        String[] us = heap String[2];
+        String[] is = heap String[2];
+        float64[] rs = heap float64[2];
+        us[0] = "A"; is[0] = "x"; rs[0] = 1.0;
+        us[1] = "A"; is[1] = "x"; rs[1] = 2.0;         // duplicate pair
+        boolean threw = false;
+        try {
+            Interactions m = Interactions.of(us, is, rs);
+        } catch (RsException ex) { threw = true; }
+        Assert.isTrue(threw);
+
+        is[1] = "y";
+        rs[1] = 0.0 / 0.0;                             // NaN rating
+        threw = false;
+        try {
+            Interactions m2 = Interactions.of(us, is, rs);
+        } catch (RsException ex) { threw = true; }
+        Assert.isTrue(threw);
+
+        float64[] shortR = heap float64[1];
+        shortR[0] = 1.0;
+        threw = false;
+        try {
+            Interactions m3 = Interactions.of(us, is, shortR);
+        } catch (RsException ex) { threw = true; }
+        Assert.isTrue(threw);
+        return;
+    }
+}

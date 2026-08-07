@@ -1,0 +1,60 @@
+package dev.cajeta.recsys.tour;
+
+import dev.cajeta.recsys.Interactions;
+import dev.cajeta.recsys.RsException;
+
+/**
+ * The self-checking tour of dev.cajeta.recsys. Every passage
+ * demonstrates a documented claim and CHECKS it — a non-zero exit means
+ * the docs lied. Passages land unit by unit alongside the library.
+ */
+public final class Tour {
+
+    static int32 failures;
+
+    static void check(boolean ok, String what) {
+        if (ok) {
+            System.stdout.println("  ok  - " + what);
+        } else {
+            System.stdout.println("  FAIL- " + what);
+            Tour.failures = Tour.failures + 1;
+        }
+        return;
+    }
+
+    /** Passage 1 — missing is not zero, structurally. */
+    static void interactionsPassage() {
+        System.stdout.println("passage: the interaction matrix");
+        String[] us = heap String[3];
+        String[] is = heap String[3];
+        float64[] rs = heap float64[3];
+        us[0] = "ana"; is[0] = "dune";    rs[0] = 0.0;   // rated ZERO
+        us[1] = "ana"; is[1] = "solaris"; rs[1] = 5.0;
+        us[2] = "ben"; is[2] = "solaris"; rs[2] = 4.0;
+        Interactions m = Interactions.of(us, is, rs);
+        Tour.check(m.rating((int64) 0, (int64) 0) == 0.0,
+            "a rating of zero is a rating");
+        boolean threw = false;
+        try {
+            float64 v = m.rating((int64) 1, (int64) 0);
+        } catch (RsException ex) { threw = true; }
+        Tour.check(threw, "a missing cell throws - it never reads as 0.0");
+        Tour.check(m.toDense(-1.0).flatGet((int64) 2) == -1.0,
+            "densification carries the caller-named fill, not a silent 0");
+        Tour.check(m.userId(m.userIndex("ben")).equals("ben"),
+            "external ids round-trip through contiguous indices");
+        return;
+    }
+
+    public static int32 main() {
+        Tour.failures = 0;
+        System.stdout.println("== dev.cajeta.recsys tour ==");
+        Tour.interactionsPassage();
+        if (Tour.failures > 0) {
+            System.stdout.println("TOUR FAILED: " + Tour.failures + " check(s)");
+            return 1;
+        }
+        System.stdout.println("tour complete: all checks passed");
+        return 0;
+    }
+}

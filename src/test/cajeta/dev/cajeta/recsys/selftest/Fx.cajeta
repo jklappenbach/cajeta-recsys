@@ -1,0 +1,28 @@
+package dev.cajeta.recsys.selftest;
+
+import cajeta.math.Tensor;
+import cajeta.math.npio.Npy;
+import cajeta.error.RecoverableException;
+
+/**
+ * Golden-fixture access: `.npy` files computed by the pinned oracles
+ * (Surprise 1.1.5 / scikit-learn 1.9.0, `tools/fixtures/gen_recsys.py`),
+ * located through the `RS_FIXTURES` env var run-tests.sh sets.
+ */
+public final class Fx {
+
+    public static #Tensor<float64> load(String name) {
+        String root = System.env.get("RS_FIXTURES");
+        if (root == null) {
+            throw heap RecoverableException(
+                "RS_FIXTURES not set — run the suite via run-tests.sh");
+        }
+        return Npy.loadF64(root + "/" + name + ".npy");
+    }
+
+    public static boolean close(float64 a, float64 b, float64 tol) {
+        float64 d = a - b;
+        if (d < 0.0) { d = -d; }
+        return d < tol;
+    }
+}

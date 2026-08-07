@@ -1,0 +1,12 @@
+package dev.cajeta.recsys.selftest;
+
+/**
+ * The InteractionsTest frame schema: (user, item, rating) triples the
+ * natural way a ratings file lands in a frame. Cross-file record per
+ * the ecosystem convention.
+ */
+public record RsRow {
+    Utf8 user;
+    Utf8 item;
+    float64 rating;
+}

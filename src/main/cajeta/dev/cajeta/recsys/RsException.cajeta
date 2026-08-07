@@ -1,0 +1,17 @@
+package dev.cajeta.recsys;
+
+import cajeta.error.RecoverableException;
+import cajeta.lang.String;
+
+/**
+ * Thrown on recommender misuse a caller can act on: reading a missing
+ * interaction as if it were a rating, densifying without an explicit
+ * fill, unknown user/item ids, duplicate triples, and
+ * predict-before-fit. Recoverable, mirroring `dev.cajeta.ml.MlException`.
+ */
+public class RsException extends RecoverableException {
+    public RsException(String message) {
+        this.message = message;
+        this.cause = 0;
+    }
+}

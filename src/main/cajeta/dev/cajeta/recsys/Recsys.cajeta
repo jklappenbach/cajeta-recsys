@@ -1,0 +1,25 @@
+package dev.cajeta.recsys;
+
+/**
+ * cajeta-recsys — user-item recommendation: the interaction matrix in
+ * which **missing and zero are distinguishable by construction** (the
+ * defining invariant of the domain, spec §12.1), rating baselines,
+ * neighbourhood and matrix-factorization collaborative filtering,
+ * singular value thresholding, co-clustering, ranking metrics, and
+ * matrix estimation over time series (mSSA).
+ *
+ * Parity oracles (spec §1.3): Surprise 1.1.5 for the collaborative
+ * algorithms — a divergence there is a finding to investigate, NOT
+ * automatically a cajeta bug — and scikit-learn 1.9.0 for TF-IDF and
+ * cosine; mSSA is treated as a research-grade reference.
+ *
+ * This is the library entry class (the `--emit=cja` root). The surface
+ * lands unit by unit per the ml-recsys plan.
+ */
+public final class Recsys {
+    /** The library version. */
+    public static #String version() { return "0.1.0"; }
+
+    /** `--emit=cja` entry. */
+    public static int32 run() { return 0; }
+}
