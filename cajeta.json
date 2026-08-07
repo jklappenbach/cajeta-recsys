@@ -37,7 +37,8 @@
         // content-based unit unblocks (cajeta-docs U6–U7 unstarted).
         "dependencies": {
             "dev.cajeta.ml": "0.9.0",
-            "dev.cajeta.timeseries": "0.1.0"
+            "dev.cajeta.timeseries": "0.1.0",
+            "dev.cajeta.docs": "0.1.0"
         },
 
         "dev-dependencies": {

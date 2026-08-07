@@ -138,14 +138,51 @@ fi
 echo ">> cajeta-timeseries: $ts_cja"
 
 
+# dev.cajeta.docs resolution — same ladder again (mSSA consumes its
+# trajectory transform, settings.dependencies):
+#   1. $DOCS_CJA      — explicit archive path, used verbatim
+#   2. $DOCS_REPO     — sibling checkout (default ../cajeta-docs)
+#   3. $OLLA_HOME   — installed dev.cajeta.docs at the cajeta.json pin
+#   4. Olla registry — sha256-verified fetch, cached under build/.docs-cache
+DOCS_REPO="${DOCS_REPO:-$here/../cajeta-docs}"
+docs_cja="${DOCS_CJA:-}"
+if [[ -z "$docs_cja" && -d "$DOCS_REPO" ]]; then
+    echo ">> building cajeta-docs from checkout ($DOCS_REPO)"
+    ( cd "$DOCS_REPO" && "$CAJETA" build >/dev/null )
+    docs_cja="$(ls -t "$DOCS_REPO"/build/archive/dev.cajeta.docs-*.cja 2>/dev/null | head -1)"
+fi
+if [[ -z "$docs_cja" ]]; then
+    DOCS_VER="$(sed -n 's/.*"dev\.cajeta\.docs"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$here/cajeta.json" | head -1)"
+    [[ -n "$DOCS_VER" ]] || { echo "no dev.cajeta.docs pin in cajeta.json" >&2; exit 1; }
+    store_docs="$OLLA_HOME/dev.cajeta.docs/$DOCS_VER/dev.cajeta.docs-$DOCS_VER.cja"
+    cache_docs="$here/build/.docs-cache/dev.cajeta.docs-$DOCS_VER.cja"
+    if [[ -f "$store_docs" ]]; then docs_cja="$store_docs"
+    elif [[ -f "$cache_docs" ]]; then docs_cja="$cache_docs"
+    else
+        echo ">> fetching dev.cajeta.docs $DOCS_VER from $OLLA_URL"
+        meta="$(curl -fsS "$OLLA_URL/v2/resolve?name=dev.cajeta.docs&version=$DOCS_VER")"
+        sha="$(printf '%s' "$meta" | sed -n 's/.*"sha256":"sha256:\([0-9a-f]*\)".*/\1/p')"
+        [[ -n "$sha" ]] || { echo "/v2/resolve gave no sha256" >&2; exit 1; }
+        mkdir -p "$(dirname "$cache_docs")"
+        curl -fsS -o "$cache_docs" "$OLLA_URL/v2/blob/$sha"
+        got="$(sha256_of "$cache_docs")"
+        [[ "$got" == "$sha" ]] || { rm -f "$cache_docs"; echo "sha256 mismatch fetching ml" >&2; exit 1; }
+        docs_cja="$cache_docs"
+    fi
+fi
+[[ -f "$docs_cja" ]] || { echo "could not resolve a dev.cajeta.docs archive" >&2; exit 1; }
+echo ">> cajeta-docs: $docs_cja"
+
+
 echo ">> building recsys library .cja"
 "$CAJETA" --emit=cja -o "$out/recsys.cja" \
-    --classpath="$ml_cja,$ts_cja" \
+    --classpath="$ml_cja,$ts_cja,$docs_cja" \
     dev.cajeta.recsys.Recsys.run "$here/src/main/cajeta" "$out" >/dev/null
 
 echo ">> building + running the test binary"
 "$CAJETA" --emit=exe --profile=test \
-    --classpath="$out/recsys.cja,$unit_cja,$ml_cja,$ts_cja" \
+    --classpath="$out/recsys.cja,$unit_cja,$ml_cja,$ts_cja,$docs_cja" \
     -o "$out/rstests" \
     dev.cajeta.recsys.selftest.TestMain.run "$here/src/test/cajeta" "$out" >/dev/null
 

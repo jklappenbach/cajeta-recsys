@@ -1,0 +1,185 @@
+package dev.cajeta.recsys;
+
+import cajeta.math.Tensor;
+import cajeta.math.distance.Distance;
+import cajeta.nucleo.sparse.CsrMatrix;
+import dev.cajeta.docs.Vectorizer;
+
+/**
+ * Content-based filtering (spec §7): item profiles are TF-IDF vectors
+ * built **via `dev.cajeta.docs`** (§7.1, §11.1 — no tokenizer or
+ * TF-IDF lives here), similarity is COSINE through
+ * `cajeta.math.distance` (§8.5's shared kernels), a user profile is
+ * the rating-weighted combination of their rated items' profiles
+ * (§7.3), and recommendation excludes already-interacted items unless
+ * explicitly asked (§7.4, §12.6).
+ *
+ * **Cold start is the point** (§7.5): item indexes `0..nTexts-1` align
+ * with the interaction matrix's item indexing, and indexes BEYOND
+ * `itemCount()` — items with features but no interactions yet — are
+ * first-class recommendation candidates.
+ *
+ * A zero-norm profile (empty/all-stopword text) has similarity 0 by
+ * the stdlib kernel's policy (§8.6) — never a division by zero.
+ */
+public final class ContentBased {
+
+    Vectorizer vec;
+    Tensor<float64> profiles;    // (nItems, vocab) dense rows
+    int64 nItems;
+    int64 vocabW;
+    boolean fitted;
+
+    public ContentBased() {
+        this.fitted = false;
+        return;
+    }
+
+    /** Build item profiles from item texts (§7.1). */
+    public void fitItems(String[] itemTexts) {
+        int64 n = (int64) itemTexts.count();
+        if (n < 1) {
+            throw heap RsException("ContentBased: no item texts");
+        }
+        Vectorizer v = heap Vectorizer();
+        v.fit(itemTexts);
+        CsrMatrix m = v.transform(itemTexts);
+        this.profiles #= m.toDense();
+        this.vec #= v;
+        this.nItems = n;
+        this.vocabW = this.profiles.shapeAt(1);
+        this.fitted = true;
+        return;
+    }
+
+    /** Number of profiled items (may exceed the interaction catalog). */
+    public int64 itemCount() {
+        this.check();
+        return this.nItems;
+    }
+
+    /** Cosine similarity of two item profiles (§7.2). */
+    public float64 itemSimilarity(int64 a, int64 b) {
+        this.check();
+        return Distance.cosineSimilarity(this.row(a), this.row(b));
+    }
+
+    /** The `n` most similar items to `item`, scored (§7.2). */
+    public #TopNList similarItems(int64 item, int64 n) {
+        this.check();
+        float64[] score = heap float64[this.nItems];
+        int64 i = 0;
+        while (i < this.nItems) {
+            if (i == item) { score[i] = -2.0; }        // exclude self
+            else { score[i] = this.itemSimilarity(item, i); }
+            i = i + 1;
+        }
+        return ContentBased.rank(score, this.nItems, n);
+    }
+
+    /**
+     * The user's profile (§7.3): the rating-weighted sum of the item
+     * profiles they interacted with.
+     */
+    public #Tensor<float64> userProfile(Interactions m, int64 u) {
+        this.check();
+        float64[] acc = heap float64[this.vocabW];
+        int64 k = 0;
+        while (k < m.userNnz(u)) {
+            int64 item = m.userItemAt(u, k);
+            float64 r = m.userRatingAt(u, k);
+            if (item < this.nItems) {
+                int64 c = 0;
+                while (c < this.vocabW) {
+                    acc[c] = acc[c]
+                        + r * this.profiles.flatGet(item * this.vocabW + c);
+                    c = c + 1;
+                }
+            }
+            k = k + 1;
+        }
+        int64[] sh = heap int64[1]; sh[0] = this.vocabW;
+        return Tensor.of<float64>(acc, sh);
+    }
+
+    /** Recommend for a user; seen items EXCLUDED by default (§7.4). */
+    public #TopNList recommendFor(Interactions m, int64 u, int64 n) {
+        return this.recommendFor(m, u, n, false);
+    }
+
+    /** Recommend; `includeSeen` is the explicit opt-in (§12.6). */
+    public #TopNList recommendFor(Interactions m, int64 u, int64 n,
+                                  boolean includeSeen) {
+        this.check();
+        Tensor<float64> up = this.userProfile(m, u);
+        float64[] score = heap float64[this.nItems];
+        int64 i = 0;
+        while (i < this.nItems) {
+            boolean seen = u >= 0 && u < m.userCount()
+                && i < m.itemCount() && m.has(u, i);
+            if (seen && !includeSeen) {
+                score[i] = -2.0;
+            } else {
+                score[i] = Distance.cosineSimilarity(up, this.row(i));
+            }
+            i = i + 1;
+        }
+        return ContentBased.rank(score, this.nItems, n);
+    }
+
+    #Tensor<float64> row(int64 i) {
+        float64[] a = heap float64[this.vocabW];
+        int64 c = 0;
+        while (c < this.vocabW) {
+            a[c] = this.profiles.flatGet(i * this.vocabW + c);
+            c = c + 1;
+        }
+        int64[] sh = heap int64[1]; sh[0] = this.vocabW;
+        return Tensor.of<float64>(a, sh);
+    }
+
+    static #TopNList rank(float64[] score, int64 nItems, int64 n) {
+        int64 take = n;
+        if (nItems < take) { take = nItems; }
+        int64[] items = heap int64[take];
+        float64[] scores = heap float64[take];
+        boolean[] used = heap boolean[nItems];
+        int64 r = 0;
+        while (r < take) {
+            int64 best = -1;
+            int64 i = 0;
+            while (i < nItems) {
+                if (!used[i] && score[i] > -2.0) {
+                    if (best < 0 || score[i] > score[best]) { best = i; }
+                }
+                i = i + 1;
+            }
+            if (best < 0) {
+                // Fewer eligible than requested: shrink.
+                int64[] it2 = heap int64[r];
+                float64[] sc2 = heap float64[r];
+                int64 t = 0;
+                while (t < r) {
+                    it2[t] = items[t];
+                    sc2[t] = scores[t];
+                    t = t + 1;
+                }
+                TopNList small = heap TopNList(#it2, #sc2);
+                return #small;
+            }
+            items[r] = best;
+            scores[r] = score[best];
+            used[best] = true;
+            r = r + 1;
+        }
+        TopNList out = heap TopNList(#items, #scores);
+        return #out;
+    }
+
+    void check() {
+        if (!this.fitted) {
+            throw heap RsException("ContentBased: fitItems first");
+        }
+        return;
+    }
+}

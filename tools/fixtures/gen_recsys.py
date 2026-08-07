@@ -285,6 +285,29 @@ def gen_cocluster():
     save("rs_cc_rmse", [rmse])
 
 
+def gen_content():
+    """U6 — content-based filtering: TF-IDF + cosine pinned against
+    sklearn 1.9.0 (12.3). Item texts for a small catalog; the pairwise
+    cosine similarity over default TfidfVectorizer rows."""
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    texts = [
+        "space opera with rebel pilots and ancient mystic orders",
+        "gritty space station politics and alien diplomacy drama",
+        "cozy village bakery romance with seasonal recipes",
+        "sourdough baking handbook with starter maintenance recipes",
+        "deep space salvage crew finds derelict alien vessel",
+        "small town romance rekindled at the harvest festival",
+    ]
+    with open(f"{OUT}/rs_item_texts.txt", "w") as f:
+        f.write("\n".join(texts) + "\n")
+    tv = TfidfVectorizer()
+    m = tv.fit_transform(texts)
+    sim = cosine_similarity(m)
+    save("rs_content_sim", sim)
+
+
 def main():
     print(f"surprise {surprise.__version__} / sklearn {sklearn.__version__} "
           f"fixtures -> {OUT}")
@@ -292,6 +315,7 @@ def main():
     gen_knn()
     gen_mf()
     gen_cocluster()
+    gen_content()
 
 
 if __name__ == "__main__":

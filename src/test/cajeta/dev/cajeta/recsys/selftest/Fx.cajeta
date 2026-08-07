@@ -1,6 +1,8 @@
 package dev.cajeta.recsys.selftest;
 
 import cajeta.math.Tensor;
+import cajeta.io.file.File;
+import cajeta.lang.StringBuilder;
 import cajeta.math.npio.Npy;
 import cajeta.error.RecoverableException;
 
@@ -18,6 +20,18 @@ public final class Fx {
                 "RS_FIXTURES not set — run the suite via run-tests.sh");
         }
         return Npy.loadF64(root + "/" + name + ".npy");
+    }
+
+    public static #String loadText(String name) {
+        String root = System.env.get("RS_FIXTURES");
+        if (root == null) {
+            throw heap RecoverableException(
+                "RS_FIXTURES not set — run the suite via run-tests.sh");
+        }
+        int8[] bytes = File.readAllBytes(root + "/" + name);
+        StringBuilder sb = heap StringBuilder();
+        sb.appendBytes(bytes, (int32) 0, (int32) bytes.count());
+        return sb.toString();
     }
 
     public static boolean close(float64 a, float64 b, float64 tol) {

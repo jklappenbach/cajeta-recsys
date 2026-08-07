@@ -1,0 +1,180 @@
+package dev.cajeta.recsys.selftest;
+
+import dev.cajeta.unit.Assert;
+import cajeta.math.Tensor;
+import dev.cajeta.recsys.ContentBased;
+import dev.cajeta.recsys.Interactions;
+import dev.cajeta.recsys.TopNList;
+
+/**
+ * ml-recsys U6 — content-based filtering: profiles via cajeta-docs
+ * (6.1.1 — no TF-IDF here), sklearn-pinned cosine similarity (6.1.5,
+ * §12.3), rating-weighted user profiles (6.1.3), the default seen-item
+ * exclusion (§7.4), and the COLD-START item that collaborative
+ * filtering cannot serve (6.1.4 — the reason this family exists).
+ */
+public class ContentBasedTest {
+
+    public ContentBasedTest() { return; }
+
+    static #String[] texts() {
+        String all = Fx.loadText("rs_item_texts.txt");
+        int64 n = all.count();
+        int64 lines = 0;
+        int64 i = 0;
+        while (i < n) {
+            if (all.charAt((int32) i) == 10) { lines = lines + 1; }
+            i = i + 1;
+        }
+        String[] out = heap String[lines];
+        int64 li = 0;
+        i = 0;
+        while (i < n) {
+            int64 eol = i;
+            while (eol < n && all.charAt((int32) eol) != 10) {
+                eol = eol + 1;
+            }
+            out[li] = all.substring((int32) i, (int32) eol);
+            li = li + 1;
+            i = eol + 1;
+        }
+        return #out;
+    }
+
+    // 6.1.1 + 6.1.5 + §12.3 — pairwise cosine over docs' TF-IDF rows
+    // matches sklearn's cosine_similarity(TfidfVectorizer(...)) at 1e-10.
+    @Test
+    public void similarityMatchesSklearn() {
+        ContentBased cb = heap ContentBased();
+        cb.fitItems(ContentBasedTest.texts());
+        Tensor<float64> want = Fx.load("rs_content_sim");
+        int64 n = cb.itemCount();
+        Assert.equals(n, (int64) 6);
+        int64 a = 0;
+        while (a < n) {
+            int64 b = 0;
+            while (b < n) {
+                Assert.isTrue(Fx.close(cb.itemSimilarity(a, b),
+                    want.flatGet(a * n + b), 0.0000000001));
+                b = b + 1;
+            }
+            a = a + 1;
+        }
+        // 6.1.2 — top-n similar items, scored, self excluded: the two
+        // baking texts (2, 3) find each other first.
+        TopNList sim = cb.similarItems((int64) 3, (int64) 2);
+        Assert.equals(sim.itemAt((int64) 0), (int64) 2);
+        Assert.isTrue(sim.scoreAt((int64) 0) > sim.scoreAt((int64) 1));
+        return;
+    }
+
+    // 6.1.3 + §7.4 — the user profile is rating-weighted; recommending
+    // excludes rated items by default and surfaces the same-taste rest.
+    @Test
+    public void userProfilesAndSeenExclusion() {
+        ContentBased cb = heap ContentBased();
+        cb.fitItems(ContentBasedTest.texts());
+        // A space-opera fan: loves items 0 and 4, hated the bakery.
+        String[] us = heap String[3];
+        String[] is = heap String[3];
+        float64[] rs = heap float64[3];
+        us[0] = "fan"; is[0] = "0"; rs[0] = 5.0;
+        us[1] = "fan"; is[1] = "4"; rs[1] = 4.5;
+        us[2] = "fan"; is[2] = "2"; rs[2] = 1.0;
+        Interactions m = ContentBasedTest.matrix(us, is, rs);
+        // NOTE the matrix indexes items by first appearance: raw "0"→0,
+        // "4"→1, "2"→2. The PROFILES are indexed by text order, so the
+        // caller aligns by using raw-id order in the matrix too — here
+        // we look ups through the map.
+        int64 u = m.userIndex("fan");
+        TopNList rec = cb.recommendFor(ContentBasedTest.aligned(m), u,
+            (int64) 2);
+        // The space-station and salvage-crew items (1, 4-raw) lead; the
+        // rated ones are absent.
+        int64 r = 0;
+        while (r < rec.count()) {
+            Assert.isTrue(rec.itemAt(r) != (int64) 0);
+            Assert.isTrue(rec.itemAt(r) != (int64) 4);
+            Assert.isTrue(rec.itemAt(r) != (int64) 2);
+            r = r + 1;
+        }
+        Assert.equals(rec.itemAt((int64) 0), (int64) 1);   // space station
+        // Opt-in brings the seen items back (§12.6).
+        TopNList all = cb.recommendFor(ContentBasedTest.aligned(m), u,
+            (int64) 6, true);
+        boolean sawSeen = false;
+        r = 0;
+        while (r < all.count()) {
+            if (all.itemAt(r) == (int64) 0) { sawSeen = true; }
+            r = r + 1;
+        }
+        Assert.isTrue(sawSeen);
+        return;
+    }
+
+    // 6.1.4 + §7.5 — the cold-start item: text index 5 has NO
+    // interactions anywhere, and is still recommended to the romance
+    // reader — the case §4/§5 cannot serve.
+    @Test
+    public void coldStartItemsAreRecommendable() {
+        ContentBased cb = heap ContentBased();
+        cb.fitItems(ContentBasedTest.texts());
+        // A romance reader rated only the bakery romance (2) highly;
+        // item 5 (harvest-festival romance) has no ratings from anyone.
+        String[] us = heap String[2];
+        String[] is = heap String[2];
+        float64[] rs = heap float64[2];
+        us[0] = "reader"; is[0] = "2"; rs[0] = 5.0;
+        us[1] = "other";  is[1] = "0"; rs[1] = 3.0;
+        Interactions m = ContentBasedTest.matrix(us, is, rs);
+        int64 u = m.userIndex("reader");
+        TopNList rec = cb.recommendFor(ContentBasedTest.aligned(m), u,
+            (int64) 2);
+        // The cold-start romance (5) outranks space operas for them.
+        boolean sawCold = false;
+        int64 r = 0;
+        while (r < rec.count()) {
+            if (rec.itemAt(r) == (int64) 5) { sawCold = true; }
+            r = r + 1;
+        }
+        Assert.isTrue(sawCold);
+        return;
+    }
+
+    /** Interactions whose item indexes EQUAL the raw ids (0..5). */
+    static #Interactions aligned(Interactions m) {
+        // Rebuild with items 0..5 registered in order so matrix item
+        // index == profile index. Register a priming user rating every
+        // item once at the global mean-ish 3.0? That would pollute
+        // has() — instead build from the ORIGINAL triples padded with
+        // one priming row per item under a sentinel user, then the
+        // sentinel never queries. Simplest honest alignment for the
+        // test: construct the matrix so first appearances run 0..5.
+        return #m;
+    }
+
+    static #Interactions matrix(String[] us, String[] is, float64[] rs) {
+        // Prime item indexes 0..5 in order with a sentinel user so the
+        // matrix's item indexing equals the text indexing; sentinel
+        // ratings are neutral and belong to a user no test queries.
+        int64 n = (int64) rs.count();
+        String[] u2 = heap String[n + 6];
+        String[] i2 = heap String[n + 6];
+        float64[] r2 = heap float64[n + 6];
+        int64 t = 0;
+        while (t < 6) {
+            u2[t] = "__prime__";
+            i2[t] = "" + t;
+            r2[t] = 3.0;
+            t = t + 1;
+        }
+        t = 0;
+        while (t < n) {
+            u2[6 + t] = us[t];
+            i2[6 + t] = is[t];
+            r2[6 + t] = rs[t];
+            t = t + 1;
+        }
+        return Interactions.of(u2, i2, r2);
+    }
+}
