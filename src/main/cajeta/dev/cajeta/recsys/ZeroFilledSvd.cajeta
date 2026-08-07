@@ -1,0 +1,126 @@
+package dev.cajeta.recsys;
+
+import cajeta.math.Tensor;
+import cajeta.math.linalg.LinAlg;
+
+/**
+ * The TEXTBOOK factorization, **named for what it does** (spec §5.0):
+ * fills every missing cell with ZERO and takes a truncated SVD of the
+ * dense result — sklearn's `TruncatedSVD` on the zero-filled matrix.
+ *
+ * **Zero-filling treats "not rated" as "rated zero."** That is a
+ * strong and usually wrong assumption — the exact conflation §2.1
+ * exists to prevent everywhere else — and it is why this class calls
+ * `toDense(0.0)` with the zero spelled out. When the assumption is
+ * wrong for your data, use {@link SgdMf}, which factorizes the
+ * OBSERVED entries only and never materializes a dense matrix. The two
+ * give DIFFERENT answers by design; if they agree, one of them is
+ * broken (§5's note).
+ */
+public final class ZeroFilledSvd implements RatingPredictor {
+
+    int64 rank;
+    Tensor<float64> recon;
+    float64[] sing;
+    float64 mu;
+    float64 lo;
+    float64 hi;
+    int64 nU;
+    int64 nI;
+    boolean fitted;
+
+    public ZeroFilledSvd(int64 rank) {
+        if (rank < 1) {
+            throw heap RsException("ZeroFilledSvd: rank must be >= 1");
+        }
+        this.rank = rank;
+        this.fitted = false;
+        return;
+    }
+
+    public void fit(Interactions m) {
+        this.mu = Baselines.observedMean(m);
+        this.lo = m.minRating();
+        this.hi = m.maxRating();
+        this.nU = m.userCount();
+        this.nI = m.itemCount();
+        if (this.rank > this.nU || this.rank > this.nI) {
+            throw heap RsException("ZeroFilledSvd: rank " + this.rank
+                + " exceeds the matrix (" + this.nU + "×" + this.nI + ")");
+        }
+        // THE zero-fill — explicit, and the documented assumption.
+        Tensor<float64> dense = m.toDense(0.0);
+        Tensor<float64>[] usv = LinAlg.svd<float64>(dense);
+        Tensor<float64> u = usv[0];
+        Tensor<float64> s = usv[1];
+        Tensor<float64> vt = usv[2];
+        float64[] sg = heap float64[this.rank];
+        int64 k = 0;
+        while (k < this.rank) { sg[k] = s.flatGet(k); k = k + 1; }
+        this.sing #= sg;
+        // Reconstruction U_k S_k Vt_k.
+        float64[] rc = heap float64[this.nU * this.nI];
+        int64 r = 0;
+        while (r < this.nU) {
+            int64 c = 0;
+            while (c < this.nI) {
+                float64 acc = 0.0;
+                k = 0;
+                while (k < this.rank) {
+                    acc = acc + u.flatGet(r * s.shapeAt(0) + k)
+                        * this.sing[k] * vt.flatGet(k * this.nI + c);
+                    k = k + 1;
+                }
+                rc[r * this.nI + c] = acc;
+                c = c + 1;
+            }
+            r = r + 1;
+        }
+        int64[] sh = heap int64[2]; sh[0] = this.nU; sh[1] = this.nI;
+        Tensor<float64> rt = Tensor.of<float64>(rc, sh);
+        this.recon #= rt;
+        this.fitted = true;
+        return;
+    }
+
+    /** The rank-`k` reconstruction (raw — what TruncatedSVD gives). */
+    public #Tensor<float64> reconstruction() {
+        this.check();
+        int64 sz = this.nU * this.nI;
+        float64[] a = heap float64[sz];
+        int64 t = 0;
+        while (t < sz) { a[t] = this.recon.flatGet(t); t = t + 1; }
+        int64[] sh = heap int64[2]; sh[0] = this.nU; sh[1] = this.nI;
+        return Tensor.of<float64>(a, sh);
+    }
+
+    /** The retained singular values (inspectable, §5.6). */
+    public #float64[] singularValues() {
+        this.check();
+        float64[] out = heap float64[this.rank];
+        int64 k = 0;
+        while (k < this.rank) { out[k] = this.sing[k]; k = k + 1; }
+        return #out;
+    }
+
+    public float64 predict(int64 u, int64 i) {
+        this.check();
+        if (u < 0 || u >= this.nU || i < 0 || i >= this.nI) {
+            return this.clip(this.mu);
+        }
+        return this.clip(this.recon.flatGet(u * this.nI + i));
+    }
+
+    float64 clip(float64 v) {
+        if (v < this.lo) { return this.lo; }
+        if (v > this.hi) { return this.hi; }
+        return v;
+    }
+
+    void check() {
+        if (!this.fitted) {
+            throw heap RsException("ZeroFilledSvd: not fitted yet");
+        }
+        return;
+    }
+}

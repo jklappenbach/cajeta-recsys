@@ -1,0 +1,192 @@
+package dev.cajeta.recsys;
+
+import cajeta.math.Tensor;
+import cajeta.math.random.Generator;
+
+/**
+ * Koren-style SGD matrix factorization over the OBSERVED entries only
+ * (spec §5.1–§5.3) — Surprise's `SVD`: `r̂ = μ + b_u + b_i + qᵢᵀp_u`,
+ * biases and factors updated by stochastic gradient descent with a
+ * shared learning rate and L2 regularization.
+ *
+ * **This class never materializes a dense matrix** — it touches only
+ * the sparse adjacency (grep it: no `toDense`, no `toCsr`). That is
+ * the entire difference from {@link ZeroFilledSvd}, whose zero-fill
+ * assumption this model does not make. The two give different answers
+ * by design (§5's note).
+ *
+ * Seeded and reproducible (§5.2, §12.5): factor init draws from
+ * `cajeta.math.random.Generator(seed)` (σ 0.1, Surprise's init scale),
+ * and the update order is the matrix's own CSR order — deterministic,
+ * so a refit is bit-identical. Bitwise parity with Surprise is
+ * impossible across RNGs; the pinned claim is held-out RMSE at fixed
+ * hyperparameters (DifferencesFromOracles.md).
+ */
+public final class SgdMf implements RatingPredictor {
+
+    int64 nFactors;
+    int64 epochs;
+    float64 lr;
+    float64 reg;
+    uint64 seed;
+
+    float64 mu;
+    float64[] bu;
+    float64[] bi;
+    float64[] pu;        // (nU, f) row-major
+    float64[] qi;        // (nI, f) row-major
+    float64 lo;
+    float64 hi;
+    int64 nU;
+    int64 nI;
+    boolean fitted;
+
+    /** Surprise-default hyperparameters: 20 epochs, lr .005, reg .02. */
+    public SgdMf(int64 nFactors, uint64 seed) {
+        this.init(nFactors, (int64) 20, 0.005, 0.02, seed);
+        return;
+    }
+
+    /** Full-control constructor (§5.2). */
+    public SgdMf(int64 nFactors, int64 epochs, float64 lr, float64 reg,
+                 uint64 seed) {
+        this.init(nFactors, epochs, lr, reg, seed);
+        return;
+    }
+
+    void init(int64 nFactors, int64 epochs, float64 lr, float64 reg,
+              uint64 seed) {
+        if (nFactors < 1 || epochs < 1) {
+            throw heap RsException("SgdMf: nFactors and epochs must be "
+                + ">= 1");
+        }
+        this.nFactors = nFactors;
+        this.epochs = epochs;
+        this.lr = lr;
+        this.reg = reg;
+        this.seed = seed;
+        this.fitted = false;
+        return;
+    }
+
+    public void fit(Interactions m) {
+        this.mu = Baselines.observedMean(m);
+        this.lo = m.minRating();
+        this.hi = m.maxRating();
+        this.nU = m.userCount();
+        this.nI = m.itemCount();
+        int64 f = this.nFactors;
+        Generator g = heap Generator(this.seed);
+        Tensor<float32> zp = g.normal(this.nU * f);
+        Tensor<float32> zq = g.normal(this.nI * f);
+        float64[] pu = heap float64[this.nU * f];
+        float64[] qi = heap float64[this.nI * f];
+        int64 t = 0;
+        while (t < this.nU * f) {
+            pu[t] = 0.1 * (float64) zp.flatGet(t);
+            t = t + 1;
+        }
+        t = 0;
+        while (t < this.nI * f) {
+            qi[t] = 0.1 * (float64) zq.flatGet(t);
+            t = t + 1;
+        }
+        float64[] bu = heap float64[this.nU];
+        float64[] bi = heap float64[this.nI];
+
+        int64 e = 0;
+        while (e < this.epochs) {
+            int64 u = 0;
+            while (u < this.nU) {
+                int64 k = 0;
+                while (k < m.userNnz(u)) {
+                    int64 i = m.userItemAt(u, k);
+                    float64 r = m.userRatingAt(u, k);
+                    float64 dot = 0.0;
+                    int64 x = 0;
+                    while (x < f) {
+                        dot = dot + qi[i * f + x] * pu[u * f + x];
+                        x = x + 1;
+                    }
+                    float64 err = r - (this.mu + bu[u] + bi[i] + dot);
+                    bu[u] = bu[u] + this.lr * (err - this.reg * bu[u]);
+                    bi[i] = bi[i] + this.lr * (err - this.reg * bi[i]);
+                    x = 0;
+                    while (x < f) {
+                        float64 puf = pu[u * f + x];
+                        float64 qif = qi[i * f + x];
+                        pu[u * f + x] = puf
+                            + this.lr * (err * qif - this.reg * puf);
+                        qi[i * f + x] = qif
+                            + this.lr * (err * puf - this.reg * qif);
+                        x = x + 1;
+                    }
+                    k = k + 1;
+                }
+                u = u + 1;
+            }
+            e = e + 1;
+        }
+        this.bu #= bu;
+        this.bi #= bi;
+        this.pu #= pu;
+        this.qi #= qi;
+        this.fitted = true;
+        return;
+    }
+
+    public float64 predict(int64 u, int64 i) {
+        if (!this.fitted) {
+            throw heap RsException("SgdMf: predict before fit");
+        }
+        float64 est = this.mu;
+        boolean ku = u >= 0 && u < this.nU;
+        boolean ki = i >= 0 && i < this.nI;
+        if (ku) { est = est + this.bu[u]; }
+        if (ki) { est = est + this.bi[i]; }
+        if (ku && ki) {
+            int64 f = this.nFactors;
+            float64 dot = 0.0;
+            int64 x = 0;
+            while (x < f) {
+                dot = dot + this.qi[i * f + x] * this.pu[u * f + x];
+                x = x + 1;
+            }
+            est = est + dot;
+        }
+        if (est < this.lo) { est = this.lo; }
+        if (est > this.hi) { est = this.hi; }
+        return est;
+    }
+
+    /** User `u`'s latent factor vector (inspectable, §5.6). */
+    public #float64[] userFactor(int64 u) {
+        this.checkFit();
+        float64[] out = heap float64[this.nFactors];
+        int64 x = 0;
+        while (x < this.nFactors) {
+            out[x] = this.pu[u * this.nFactors + x];
+            x = x + 1;
+        }
+        return #out;
+    }
+
+    /** Item `i`'s latent factor vector (inspectable, §5.6). */
+    public #float64[] itemFactor(int64 i) {
+        this.checkFit();
+        float64[] out = heap float64[this.nFactors];
+        int64 x = 0;
+        while (x < this.nFactors) {
+            out[x] = this.qi[i * this.nFactors + x];
+            x = x + 1;
+        }
+        return #out;
+    }
+
+    void checkFit() {
+        if (!this.fitted) {
+            throw heap RsException("SgdMf: not fitted yet");
+        }
+        return;
+    }
+}

@@ -1,0 +1,66 @@
+package dev.cajeta.recsys;
+
+import cajeta.math.Tensor;
+
+/**
+ * A completed matrix from {@link Svt}: the soft-thresholded low-rank
+ * reconstruction, predictable like any {@link RatingPredictor}
+ * (predictions clip to the data's scale; unknown indices fall back to
+ * the observed mean) and inspectable (§5.6).
+ */
+public final class SvtModel implements RatingPredictor {
+
+    Tensor<float64> recon;
+    float64[] shrunk;
+    float64 mu;
+    float64 lo;
+    float64 hi;
+
+    SvtModel(#Tensor<float64> recon, #float64[] shrunk, float64 mu,
+             float64 lo, float64 hi) {
+        this.recon #= recon;
+        this.shrunk #= shrunk;
+        this.mu = mu;
+        this.lo = lo;
+        this.hi = hi;
+        return;
+    }
+
+    /** No-op — the model is built complete by {@link Svt#complete}. */
+    public void fit(Interactions m) { return; }
+
+    public float64 predict(int64 u, int64 i) {
+        if (u < 0 || u >= this.recon.shapeAt(0) || i < 0
+            || i >= this.recon.shapeAt(1)) {
+            return this.clip(this.mu);
+        }
+        return this.clip(this.recon.flatGet(u * this.recon.shapeAt(1) + i));
+    }
+
+    /** The completed matrix (raw reconstruction). */
+    public #Tensor<float64> completed() {
+        int64 sz = this.recon.shapeAt(0) * this.recon.shapeAt(1);
+        float64[] a = heap float64[sz];
+        int64 t = 0;
+        while (t < sz) { a[t] = this.recon.flatGet(t); t = t + 1; }
+        int64[] sh = heap int64[2];
+        sh[0] = this.recon.shapeAt(0);
+        sh[1] = this.recon.shapeAt(1);
+        return Tensor.of<float64>(a, sh);
+    }
+
+    /** The soft-thresholded singular values (inspectable). */
+    public #float64[] singularValues() {
+        int64 n = (int64) this.shrunk.count();
+        float64[] out = heap float64[n];
+        int64 t = 0;
+        while (t < n) { out[t] = this.shrunk[t]; t = t + 1; }
+        return #out;
+    }
+
+    float64 clip(float64 v) {
+        if (v < this.lo) { return this.lo; }
+        if (v > this.hi) { return this.hi; }
+        return v;
+    }
+}

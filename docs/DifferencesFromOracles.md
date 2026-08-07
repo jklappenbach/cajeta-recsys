@@ -27,3 +27,13 @@ disagreement is recorded here.
 - **`msd` is the one similarity implemented locally** — Surprise's
   `1/(msd+1)` is domain-specific and has no stdlib home; cosine and
   Pearson math never appears in this library.
+
+## Matrix factorization (spec §5)
+
+- **SgdMf's parity with Surprise's `SVD` is at the RMSE level, not
+  bitwise.** Surprise initializes factors from numpy's MT19937; cajeta
+  seeds `cajeta.math.random.Generator` and walks its own CSR order.
+  Same algorithm (biased Koren SGD, same defaults), same split, held-out
+  RMSE pinned within 0.08 (measured: 0.625 vs Surprise's 0.643 — a
+  finding in cajeta's favour, investigated: the fixture is small enough
+  for init variance to dominate at this margin).

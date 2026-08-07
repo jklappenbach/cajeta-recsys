@@ -222,11 +222,52 @@ def gen_knn():
     assert rmse_i < rmse_u, "3.1.6 asymmetry does not hold on this fixture"
 
 
+def gen_mf():
+    """U4 — the two SVDs (spec §5's note).
+
+    Zero-filled truncated SVD: sklearn TruncatedSVD (arpack, exact for
+    this size) on the zero-filled 30×20 matrix — the RECONSTRUCTION is
+    saved (sign-invariant, unlike the factors). Surprise SVD: bit
+    parity is impossible across RNGs (its factor init draws from
+    numpy's MT19937), so the pin is the held-out RMSE at fixed
+    hyperparameters — recorded as the §11.3 judgement call in
+    DifferencesFromOracles.md.
+    """
+    from sklearn.decomposition import TruncatedSVD
+    from surprise import SVD
+
+    us, its, rs, n_u, n_i = ratings_fixture()
+    dense = np.zeros((n_u, n_i))
+    for u, i, r in zip(us.astype(int), its.astype(int), rs):
+        dense[u, i] = r
+    tsvd = TruncatedSVD(n_components=5, algorithm="arpack")
+    z = tsvd.fit_transform(dense)
+    recon = z @ tsvd.components_
+    save("rs_tsvd_recon", recon)
+    save("rs_tsvd_singular", tsvd.singular_values_)
+
+    tu = np.load(f"{OUT}/rs_knn_train_u.npy")
+    ti = np.load(f"{OUT}/rs_knn_train_i.npy")
+    tr = np.load(f"{OUT}/rs_knn_train_r.npy")
+    vu = np.load(f"{OUT}/rs_knn_test_u.npy")
+    vi = np.load(f"{OUT}/rs_knn_test_i.npy")
+    vr = np.load(f"{OUT}/rs_knn_test_r.npy")
+    ts = surprise_trainset(tu, ti, tr)
+    algo = SVD(n_factors=20, n_epochs=20, random_state=7)
+    algo.fit(ts)
+    est = np.array([algo.predict(str(int(u)), str(int(i))).est
+                    for u, i in zip(vu, vi)])
+    rmse = float(np.sqrt(np.mean((est - vr) ** 2)))
+    print(f"  [check] surprise SVD held-out rmse {rmse:.4f}")
+    save("rs_svd_rmse", [rmse])
+
+
 def main():
     print(f"surprise {surprise.__version__} / sklearn {sklearn.__version__} "
           f"fixtures -> {OUT}")
     gen_baselines()
     gen_knn()
+    gen_mf()
 
 
 if __name__ == "__main__":
