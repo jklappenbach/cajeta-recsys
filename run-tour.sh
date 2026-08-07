@@ -29,13 +29,24 @@ if [[ -z "$ts_cja" ]]; then
 fi
 [[ -f "$ts_cja" ]] || { echo "could not resolve dev.cajeta.timeseries (run ./run-tests.sh first)" >&2; exit 1; }
 
+DOCS_REPO="${DOCS_REPO:-$here/../cajeta-docs}"
+docs_cja="${DOCS_CJA:-}"
+if [[ -z "$docs_cja" && -d "$DOCS_REPO" ]]; then
+    ( cd "$DOCS_REPO" && "$CAJETA" build >/dev/null )
+    docs_cja="$(ls -t "$DOCS_REPO"/build/archive/dev.cajeta.docs-*.cja 2>/dev/null | head -1)"
+fi
+if [[ -z "$docs_cja" ]]; then
+    docs_cja="$(ls -t "$here"/build/.docs-cache/dev.cajeta.docs-*.cja 2>/dev/null | head -1)"
+fi
+[[ -f "$docs_cja" ]] || { echo "could not resolve dev.cajeta.docs (run ./run-tests.sh first)" >&2; exit 1; }
+
 echo ">> building dev.cajeta.recsys"
 "$CAJETA" build >/dev/null
 art="$(ls -t "$here"/build/archive/dev.cajeta.recsys-*.cja | head -1)"
 
 echo ">> compiling the tour"
 mkdir -p build/tour
-"$CAJETA" --emit=exe --classpath="$art,$ml_cja,$ts_cja" \
+"$CAJETA" --emit=exe --classpath="$art,$ml_cja,$ts_cja,$docs_cja" \
     -o build/tour/rs-tour \
     dev.cajeta.recsys.tour.Tour.main "$here/tour/src" build/tour >/dev/null
 

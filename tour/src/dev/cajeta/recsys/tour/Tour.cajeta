@@ -1,6 +1,12 @@
 package dev.cajeta.recsys.tour;
 
+import dev.cajeta.recsys.Baselines;
+import dev.cajeta.recsys.BiasModel;
+import dev.cajeta.recsys.ContentBased;
 import dev.cajeta.recsys.Interactions;
+import dev.cajeta.recsys.KnnCf;
+import dev.cajeta.recsys.TopN;
+import dev.cajeta.recsys.TopNList;
 import dev.cajeta.recsys.RsException;
 
 /**
@@ -46,10 +52,63 @@ public final class Tour {
         return;
     }
 
+    /** Passage 2 — predict, rank, and respect what the user has. */
+    static void recommendPassage() {
+        System.stdout.println("passage: predicting and recommending");
+        String[] us = heap String[6];
+        String[] is = heap String[6];
+        float64[] rs = heap float64[6];
+        us[0] = "ana"; is[0] = "dune";     rs[0] = 5.0;
+        us[1] = "ana"; is[1] = "solaris";  rs[1] = 4.5;
+        us[2] = "ben"; is[2] = "dune";     rs[2] = 4.5;
+        us[3] = "ben"; is[3] = "arrival";  rs[3] = 4.0;
+        us[4] = "cai"; is[4] = "notebook"; rs[4] = 5.0;
+        us[5] = "cai"; is[5] = "dune";     rs[5] = 2.0;
+        Interactions m = Interactions.of(us, is, rs);
+        BiasModel b = Baselines.bias();
+        b.fit(m);
+        float64 est = b.predict(m.userIndex("ana"),
+                                m.itemIndex("arrival"));
+        Tour.check(est >= m.minRating() && est <= m.maxRating(),
+            "predictions live on the data's own rating scale");
+        KnnCf knn = KnnCf.userBased("msd", (int64) 5, (int64) 1);
+        knn.fit(m);
+        TopNList rec = TopN.recommend(knn, m, m.userIndex("ana"),
+                                      (int64) 2);
+        int64 r = 0;
+        boolean cleanList = true;
+        while (r < rec.count()) {
+            if (m.has(m.userIndex("ana"), rec.itemAt(r))) {
+                cleanList = false;
+            }
+            r = r + 1;
+        }
+        Tour.check(cleanList,
+            "recommendations never repeat what the user already has");
+        return;
+    }
+
+    /** Passage 3 — content answers where collaboration cannot. */
+    static void contentPassage() {
+        System.stdout.println("passage: cold-start via content");
+        String[] texts = heap String[3];
+        texts[0] = "spaceship crews exploring distant nebulas";
+        texts[1] = "sourdough loaves and pastry technique";
+        texts[2] = "spaceship rescue crews in distant orbit";
+        ContentBased cb = heap ContentBased();
+        cb.fitItems(texts);
+        TopNList sim = cb.similarItems((int64) 0, (int64) 1);
+        Tour.check(sim.itemAt((int64) 0) == (int64) 2,
+            "an unrated item is reachable through its features alone");
+        return;
+    }
+
     public static int32 main() {
         Tour.failures = 0;
         System.stdout.println("== dev.cajeta.recsys tour ==");
         Tour.interactionsPassage();
+        Tour.recommendPassage();
+        Tour.contentPassage();
         if (Tour.failures > 0) {
             System.stdout.println("TOUR FAILED: " + Tour.failures + " check(s)");
             return 1;
