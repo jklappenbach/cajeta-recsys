@@ -1,0 +1,155 @@
+package dev.cajeta.recsys;
+
+import cajeta.math.Tensor;
+import cajeta.math.random.Generator;
+
+/**
+ * Interaction splitting for evaluation (spec §2.5, plan 8.1.7–8.1.8):
+ * the split is over INTERACTIONS, and every held-out triple's user and
+ * item still appear in training — an ordinary row split fabricates
+ * cold-start users and silently measures the wrong thing.
+ *
+ * - {@link #interactions}: seeded random interaction holdout with the
+ *   support guarantee; the same seed reproduces the same split
+ *   (§12.5).
+ * - {@link #byTime}: when the data carries time, the split is
+ *   CHRONOLOGICAL — train earliest, test latest, and there is no
+ *   shuffle parameter to mis-set (the `dev.cajeta.timeseries`
+ *   discipline, applied to interaction logs).
+ */
+public final class RsSplit {
+
+    /** Train-side triples. */
+    public int64[] trainU;
+    public int64[] trainI;
+    public float64[] trainR;
+
+    /** Held-out triples (support-guaranteed for `interactions`). */
+    public int64[] testU;
+    public int64[] testI;
+    public float64[] testR;
+
+    RsSplit(#int64[] trainU, #int64[] trainI, #float64[] trainR,
+            #int64[] testU, #int64[] testI, #float64[] testR) {
+        this.trainU #= trainU;
+        this.trainI #= trainI;
+        this.trainR #= trainR;
+        this.testU #= testU;
+        this.testI #= testI;
+        this.testR #= testR;
+        return;
+    }
+
+    /** Seeded random interaction holdout with the support guarantee. */
+    public static #RsSplit interactions(int64[] us, int64[] is,
+                                        float64[] rs, float64 testFraction,
+                                        uint64 seed) {
+        int64 n = RsSplit.checkTriples(us, is, rs, testFraction);
+        int64 nTest = (int64) (testFraction * (float64) n);
+        if (nTest < 1) { nTest = 1; }
+        Generator g = heap Generator(seed);
+        Tensor<int64> perm = g.permutation(n);
+        boolean[] inTest = heap boolean[n];
+        // Track remaining train support per user/item as we move rows.
+        int64 maxU = 0;
+        int64 maxI = 0;
+        int64 t = 0;
+        while (t < n) {
+            if (us[t] > maxU) { maxU = us[t]; }
+            if (is[t] > maxI) { maxI = is[t]; }
+            t = t + 1;
+        }
+        int64[] uLeft = heap int64[maxU + 1];
+        int64[] iLeft = heap int64[maxI + 1];
+        t = 0;
+        while (t < n) {
+            uLeft[us[t]] = uLeft[us[t]] + 1;
+            iLeft[is[t]] = iLeft[is[t]] + 1;
+            t = t + 1;
+        }
+        int64 got = 0;
+        int64 p = 0;
+        while (p < n && got < nTest) {
+            int64 cand = perm.flatGet(p);
+            // Only hold out when user AND item keep support in train.
+            if (uLeft[us[cand]] > 1 && iLeft[is[cand]] > 1) {
+                inTest[cand] = true;
+                uLeft[us[cand]] = uLeft[us[cand]] - 1;
+                iLeft[is[cand]] = iLeft[is[cand]] - 1;
+                got = got + 1;
+            }
+            p = p + 1;
+        }
+        return RsSplit.assemble(us, is, rs, inTest, n, got);
+    }
+
+    /** Chronological: train earliest, test latest — no shuffle exists. */
+    public static #RsSplit byTime(int64[] us, int64[] is, float64[] rs,
+                                  int64[] times, float64 testFraction) {
+        int64 n = RsSplit.checkTriples(us, is, rs, testFraction);
+        if ((int64) times.count() != n) {
+            throw heap RsException("RsSplit.byTime: times length "
+                + (int64) times.count() + " does not match " + n);
+        }
+        // Sort indices by time (stable insertion — n is evaluation-side).
+        int64[] ord = heap int64[n];
+        int64 t = 0;
+        while (t < n) { ord[t] = t; t = t + 1; }
+        int64 a = 1;
+        while (a < n) {
+            int64 cur = ord[a];
+            int64 b = a - 1;
+            while (b >= 0 && times[ord[b]] > times[cur]) {
+                ord[b + 1] = ord[b];
+                b = b - 1;
+            }
+            ord[b + 1] = cur;
+            a = a + 1;
+        }
+        int64 nTest = (int64) (testFraction * (float64) n);
+        if (nTest < 1) { nTest = 1; }
+        boolean[] inTest = heap boolean[n];
+        t = n - nTest;
+        while (t < n) { inTest[ord[t]] = true; t = t + 1; }
+        return RsSplit.assemble(us, is, rs, inTest, n, nTest);
+    }
+
+    static int64 checkTriples(int64[] us, int64[] is, float64[] rs,
+                              float64 testFraction) {
+        int64 n = (int64) rs.count();
+        if ((int64) us.count() != n || (int64) is.count() != n || n < 2) {
+            throw heap RsException("RsSplit: malformed triples");
+        }
+        if (testFraction <= 0.0 || testFraction >= 1.0) {
+            throw heap RsException("RsSplit: testFraction must be in "
+                + "(0, 1)");
+        }
+        return n;
+    }
+
+    static #RsSplit assemble(int64[] us, int64[] is, float64[] rs,
+                             boolean[] inTest, int64 n, int64 nTest) {
+        int64 nTrain = n - nTest;
+        int64[] tu = heap int64[nTrain];
+        int64[] ti = heap int64[nTrain];
+        float64[] tr = heap float64[nTrain];
+        int64[] vu = heap int64[nTest];
+        int64[] vi = heap int64[nTest];
+        float64[] vr = heap float64[nTest];
+        int64 a = 0;
+        int64 b = 0;
+        int64 t = 0;
+        while (t < n) {
+            if (inTest[t]) {
+                vu[b] = us[t]; vi[b] = is[t]; vr[b] = rs[t];
+                b = b + 1;
+            } else {
+                tu[a] = us[t]; ti[a] = is[t]; tr[a] = rs[t];
+                a = a + 1;
+            }
+            t = t + 1;
+        }
+        RsSplit s = heap RsSplit(#tu, #ti, #tr, #vu, #vi, #vr);
+        return #s;
+    }
+}

@@ -1,0 +1,66 @@
+package dev.cajeta.recsys;
+
+/**
+ * Top-N recommendation (spec §9.2, §12.6): rank the catalog for a user
+ * by predicted rating and return the top `n` with their scores.
+ *
+ * **Already-interacted items are EXCLUDED by default** — recommending
+ * what the user already has is the failure that makes a demo look
+ * broken (§12.6). Including them is the explicit opt-in overload, never
+ * a flag defaulting the wrong way.
+ */
+public final class TopN {
+
+    /** Top `n` for user `u`, seen items excluded (the default). */
+    public static #TopNList recommend(RatingPredictor p, Interactions m,
+                                      int64 u, int64 n) {
+        return TopN.recommend(p, m, u, n, false);
+    }
+
+    /** Top `n`; `includeSeen` is the EXPLICIT opt-in (§7.4, §12.6). */
+    public static #TopNList recommend(RatingPredictor p, Interactions m,
+                                      int64 u, int64 n,
+                                      boolean includeSeen) {
+        if (n < 1) {
+            throw heap RsException("TopN: n must be >= 1 (got " + n + ")");
+        }
+        int64 nI = m.itemCount();
+        float64[] score = heap float64[nI];
+        boolean[] eligible = heap boolean[nI];
+        int64 count = 0;
+        int64 i = 0;
+        while (i < nI) {
+            boolean seen = u >= 0 && u < m.userCount() && m.has(u, i);
+            if (seen && !includeSeen) {
+                eligible[i] = false;
+            } else {
+                eligible[i] = true;
+                score[i] = p.predict(u, i);
+                count = count + 1;
+            }
+            i = i + 1;
+        }
+        int64 take = n;
+        if (count < take) { take = count; }
+        int64[] items = heap int64[take];
+        float64[] scores = heap float64[take];
+        boolean[] used = heap boolean[nI];
+        int64 r = 0;
+        while (r < take) {
+            int64 best = -1;
+            i = 0;
+            while (i < nI) {
+                if (eligible[i] && !used[i]) {
+                    if (best < 0 || score[i] > score[best]) { best = i; }
+                }
+                i = i + 1;
+            }
+            items[r] = best;
+            scores[r] = score[best];
+            used[best] = true;
+            r = r + 1;
+        }
+        TopNList list = heap TopNList(#items, #scores);
+        return #list;
+    }
+}

@@ -1,0 +1,182 @@
+package dev.cajeta.recsys;
+
+/**
+ * Top-N ranking metrics (spec §9.2–§9.6). **The relevance threshold is
+ * an explicit parameter on every call** — precision@k is meaningless
+ * without saying what "relevant" means, so there is no default to
+ * mis-inherit (§9.3).
+ *
+ * **Denominator conventions, stated because §9.4 is where independent
+ * implementations silently disagree:**
+ * - `precision@k` divides by `k` — ALWAYS `k`, even when fewer than `k`
+ *   items were recommendable (an empty slot is a wasted slot).
+ * - `recall@k` divides by the number of RELEVANT held-out items; a user
+ *   with none has undefined recall and these functions THROW for them —
+ *   average over users with at least one relevant item, and say so.
+ * - `NDCG@k` uses graded gains equal to the held-out rating (linear
+ *   Järvelin gains, not `2^rel − 1`) with the `log2(rank + 1)` discount;
+ *   the ideal ranking sorts the held-out ratings descending.
+ */
+public final class RankMetrics {
+
+    /** |relevant ∩ top-k| / k (§9.2). */
+    public static float64 precisionAt(TopNList rec, int64 k,
+                                      int64[] testItems,
+                                      float64[] testRatings,
+                                      float64 threshold) {
+        RankMetrics.checkK(k);
+        int64 hits = RankMetrics.hits(rec, k, testItems, testRatings,
+                                      threshold);
+        return (float64) hits / (float64) k;
+    }
+
+    /** |relevant ∩ top-k| / |relevant| (§9.2); throws when none. */
+    public static float64 recallAt(TopNList rec, int64 k,
+                                   int64[] testItems,
+                                   float64[] testRatings,
+                                   float64 threshold) {
+        RankMetrics.checkK(k);
+        int64 rel = RankMetrics.relevantCount(testItems, testRatings,
+                                              threshold);
+        if (rel == 0) {
+            throw heap RsException("recallAt: the user has no relevant "
+                + "held-out item at threshold " + threshold + " — recall "
+                + "is undefined; average over users that have one");
+        }
+        int64 hits = RankMetrics.hits(rec, k, testItems, testRatings,
+                                      threshold);
+        return (float64) hits / (float64) rel;
+    }
+
+    /** Harmonic mean of precision@k and recall@k (§9.2). */
+    public static float64 f1At(TopNList rec, int64 k, int64[] testItems,
+                               float64[] testRatings, float64 threshold) {
+        float64 p = RankMetrics.precisionAt(rec, k, testItems,
+                                            testRatings, threshold);
+        float64 r = RankMetrics.recallAt(rec, k, testItems, testRatings,
+                                         threshold);
+        if (p + r == 0.0) { return 0.0; }
+        return 2.0 * p * r / (p + r);
+    }
+
+    /**
+     * NDCG@k with graded relevance (§9.5): gains are the held-out
+     * ratings themselves (items not held out gain 0), discount
+     * `log2(rank+1)`, ideal from the sorted held-out ratings.
+     */
+    public static float64 ndcgAt(TopNList rec, int64 k,
+                                 int64[] testItems,
+                                 float64[] testRatings) {
+        RankMetrics.checkK(k);
+        int64 n = (int64) testItems.count();
+        float64 dcg = 0.0;
+        int64 r = 0;
+        while (r < k && r < rec.count()) {
+            int64 item = rec.itemAt(r);
+            int64 t = 0;
+            while (t < n) {
+                if (testItems[t] == item) {
+                    dcg = dcg + testRatings[t]
+                        / (Math.log((float64) (r + 2)) / Math.log(2.0));
+                }
+                t = t + 1;
+            }
+            r = r + 1;
+        }
+        // Ideal: the held-out ratings sorted descending.
+        float64[] sorted = heap float64[n];
+        int64 t2 = 0;
+        while (t2 < n) { sorted[t2] = testRatings[t2]; t2 = t2 + 1; }
+        int64 a = 0;
+        while (a < n) {
+            int64 b = a + 1;
+            while (b < n) {
+                if (sorted[b] > sorted[a]) {
+                    float64 tmp = sorted[a];
+                    sorted[a] = sorted[b];
+                    sorted[b] = tmp;
+                }
+                b = b + 1;
+            }
+            a = a + 1;
+        }
+        float64 idcg = 0.0;
+        r = 0;
+        while (r < k && r < n) {
+            idcg = idcg + sorted[r]
+                / (Math.log((float64) (r + 2)) / Math.log(2.0));
+            r = r + 1;
+        }
+        if (idcg == 0.0) {
+            throw heap RsException("ndcgAt: the user has no held-out "
+                + "rating — NDCG is undefined for them");
+        }
+        return dcg / idcg;
+    }
+
+    /**
+     * Catalog coverage (§9.6): the fraction of items appearing in ANY
+     * of the given recommendation lists — a recommender that only ever
+     * suggests the popular few scores well on precision and is useless.
+     */
+    public static float64 coverage(TopNList[] lists, int64 catalogSize) {
+        boolean[] seen = heap boolean[catalogSize];
+        int64 li = 0;
+        while (li < (int64) lists.count()) {
+            TopNList l = lists[li];
+            int64 r = 0;
+            while (r < l.count()) {
+                seen[l.itemAt(r)] = true;
+                r = r + 1;
+            }
+            li = li + 1;
+        }
+        int64 c = 0;
+        int64 i = 0;
+        while (i < catalogSize) {
+            if (seen[i]) { c = c + 1; }
+            i = i + 1;
+        }
+        return (float64) c / (float64) catalogSize;
+    }
+
+    static int64 hits(TopNList rec, int64 k, int64[] testItems,
+                      float64[] testRatings, float64 threshold) {
+        int64 n = (int64) testItems.count();
+        int64 hits = 0;
+        int64 r = 0;
+        while (r < k && r < rec.count()) {
+            int64 item = rec.itemAt(r);
+            int64 t = 0;
+            while (t < n) {
+                if (testItems[t] == item
+                    && testRatings[t] >= threshold) {
+                    hits = hits + 1;
+                }
+                t = t + 1;
+            }
+            r = r + 1;
+        }
+        return hits;
+    }
+
+    static int64 relevantCount(int64[] testItems, float64[] testRatings,
+                               float64 threshold) {
+        int64 n = (int64) testItems.count();
+        int64 c = 0;
+        int64 t = 0;
+        while (t < n) {
+            if (testRatings[t] >= threshold) { c = c + 1; }
+            t = t + 1;
+        }
+        return c;
+    }
+
+    static void checkK(int64 k) {
+        if (k < 1) {
+            throw heap RsException("RankMetrics: k must be >= 1 (got "
+                + k + ")");
+        }
+        return;
+    }
+}

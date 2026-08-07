@@ -1,0 +1,33 @@
+package dev.cajeta.recsys;
+
+/** A ranked recommendation list: item indices with their scores. */
+public final class TopNList {
+
+    int64[] items;
+    float64[] scores;
+
+    TopNList(#int64[] items, #float64[] scores) {
+        this.items #= items;
+        this.scores #= scores;
+        return;
+    }
+
+    /** How many items were recommendable (may be < the requested n). */
+    public int64 count() { return (int64) this.items.count(); }
+
+    /** The item index at rank `r` (0-based, best first). */
+    public int64 itemAt(int64 r) { return this.items[r]; }
+
+    /** The predicted score at rank `r`. */
+    public float64 scoreAt(int64 r) { return this.scores[r]; }
+
+    /** True when `item` appears anywhere in the list. */
+    public boolean contains(int64 item) {
+        int64 r = 0;
+        while (r < (int64) this.items.count()) {
+            if (this.items[r] == item) { return true; }
+            r = r + 1;
+        }
+        return false;
+    }
+}

@@ -1,0 +1,32 @@
+package dev.cajeta.recsys.selftest;
+
+import dev.cajeta.recsys.Interactions;
+import dev.cajeta.recsys.RatingPredictor;
+
+/**
+ * A test predictor with pinned scores: item `items[t]` scores
+ * `scores[t]`, everything else −1 — forcing an exact ranking so the
+ * paper example in EvalTest is deterministic.
+ */
+public final class FixedScores implements RatingPredictor {
+
+    int64[] items;
+    float64[] scores;
+
+    FixedScores(#int64[] items, #float64[] scores) {
+        this.items #= items;
+        this.scores #= scores;
+        return;
+    }
+
+    public void fit(Interactions m) { return; }
+
+    public float64 predict(int64 u, int64 i) {
+        int64 t = 0;
+        while (t < (int64) this.items.count()) {
+            if (this.items[t] == i) { return this.scores[t]; }
+            t = t + 1;
+        }
+        return -1.0;
+    }
+}

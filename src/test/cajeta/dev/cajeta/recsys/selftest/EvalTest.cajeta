@@ -1,0 +1,263 @@
+package dev.cajeta.recsys.selftest;
+
+import dev.cajeta.unit.Assert;
+import cajeta.math.Tensor;
+import dev.cajeta.recsys.Baselines;
+import dev.cajeta.recsys.BiasModel;
+import dev.cajeta.recsys.GlobalMean;
+import dev.cajeta.recsys.Harness;
+import dev.cajeta.recsys.Interactions;
+import dev.cajeta.recsys.ItemMean;
+import dev.cajeta.recsys.KnnCf;
+import dev.cajeta.recsys.RankMetrics;
+import dev.cajeta.recsys.RatingPredictor;
+import dev.cajeta.recsys.RsException;
+import dev.cajeta.recsys.RsSplit;
+import dev.cajeta.recsys.TopN;
+import dev.cajeta.recsys.TopNList;
+
+/**
+ * ml-recsys U8 — evaluation: RMSE/MAE through ml.Metrics (8.1.1, via
+ * RatingScore since U2), precision/recall@k against a paper-checkable
+ * example with the denominator convention pinned (8.1.2, §12.4), F1 and
+ * NDCG (8.1.3), the explicit relevance threshold (8.1.4), the §12.2
+ * harness (8.1.5), the on-by-default seen-item filter (8.1.6, §12.6),
+ * chronological splits where time exists (8.1.7), and seeded
+ * reproducibility (8.1.8).
+ */
+public class EvalTest {
+
+    public EvalTest() { return; }
+
+    // A fixed "recommendation" list for the paper example: a predictor
+    // whose scores force the order [i3, i1, i7, i2, i9] on a 10-item
+    // catalog for user 0 (who has rated nothing — nothing filtered).
+    static #Interactions tinyCatalog() {
+        String[] us = heap String[10];
+        String[] is = heap String[10];
+        float64[] rs = heap float64[10];
+        int64 t = 0;
+        while (t < 10) {
+            us[t] = "seed";                            // one seed user
+            is[t] = "i" + t;                           // items i0..i9
+            rs[t] = 3.0;
+            t = t + 1;
+        }
+        // A second user with no ratings is impossible (§2: users exist
+        // via triples), so the paper example recommends for the SEED
+        // user with includeSeen — the ranking is what is under test.
+        return Interactions.of(us, is, rs);
+    }
+
+    // 8.1.2 + 8.1.3 + §12.4 — the paper example, checkable by hand:
+    // recommended (in order): i3, i1, i7, i2, i9
+    // held-out: i1→4.5, i2→4.0, i5→5.0; threshold 4.0 ⇒ relevant {i1,i2,i5}
+    //   P@3 = |{i1}|/3 = 1/3          R@3 = 1/3
+    //   P@5 = |{i1,i2}|/5 = 2/5       R@5 = 2/3     F1@5 = 2·(2/5)(2/3)/(16/15) = 1/2
+    //   NDCG@3: DCG = 4.5/log2(3);  IDCG = 5/log2(2)+4.5/log2(3)+4/log2(4)
+    @Test
+    public void rankingMetricsPaperExample() {
+        int64[] items = heap int64[5];
+        items[0] = 3; items[1] = 1; items[2] = 7; items[3] = 2; items[4] = 9;
+        float64[] scores = heap float64[5];
+        scores[0] = 5.0; scores[1] = 4.0; scores[2] = 3.0;
+        scores[3] = 2.0; scores[4] = 1.0;
+        TopNList rec = EvalTest.list(items, scores);
+
+        int64[] ti = heap int64[3];
+        ti[0] = 1; ti[1] = 2; ti[2] = 5;
+        float64[] tr = heap float64[3];
+        tr[0] = 4.5; tr[1] = 4.0; tr[2] = 5.0;
+
+        Assert.isTrue(Fx.close(RankMetrics.precisionAt(rec, (int64) 3,
+            ti, tr, 4.0), 1.0 / 3.0, 0.000000000001));
+        Assert.isTrue(Fx.close(RankMetrics.recallAt(rec, (int64) 3,
+            ti, tr, 4.0), 1.0 / 3.0, 0.000000000001));
+        Assert.isTrue(Fx.close(RankMetrics.precisionAt(rec, (int64) 5,
+            ti, tr, 4.0), 0.4, 0.000000000001));
+        Assert.isTrue(Fx.close(RankMetrics.recallAt(rec, (int64) 5,
+            ti, tr, 4.0), 2.0 / 3.0, 0.000000000001));
+        Assert.isTrue(Fx.close(RankMetrics.f1At(rec, (int64) 5,
+            ti, tr, 4.0), 0.5, 0.000000000001));
+
+        float64 log23 = Math.log(3.0) / Math.log(2.0);
+        float64 dcg = 4.5 / log23;
+        float64 idcg = 5.0 + 4.5 / log23 + 4.0 / 2.0;
+        Assert.isTrue(Fx.close(RankMetrics.ndcgAt(rec, (int64) 3, ti, tr),
+            dcg / idcg, 0.000000000001));
+
+        // 8.1.4 — the threshold changes the answer, visibly: at 5.0 only
+        // i5 is relevant and precision@3 collapses to 0.
+        Assert.isTrue(RankMetrics.precisionAt(rec, (int64) 3, ti, tr, 5.0)
+            == 0.0);
+        // A user with no relevant item: recall is UNDEFINED and loud.
+        boolean threw = false;
+        try {
+            float64 r = RankMetrics.recallAt(rec, (int64) 3, ti, tr, 9.0);
+        } catch (RsException ex) { threw = true; }
+        Assert.isTrue(threw);
+        return;
+    }
+
+    static #TopNList list(int64[] items, float64[] scores) {
+        // Build through the public surface: a predictor that scores
+        // exactly these items this way on the tiny catalog.
+        Interactions m = EvalTest.tinyCatalog();
+        FixedScores p = heap FixedScores(#items, #scores);
+        return TopN.recommend(p, m, (int64) 0, (int64) 5, true);
+    }
+
+    // 8.1.6 + §12.6 — already-interacted items are excluded by default;
+    // including them is the explicit opt-in.
+    @Test
+    public void seenItemsExcludedByDefault() {
+        Interactions m = KnnTest.load("rs_knn_train");
+        ItemMean im = Baselines.itemMean();
+        im.fit(m);
+        int64 u = 0;
+        TopNList rec = TopN.recommend(im, m, u, (int64) 5);
+        int64 r = 0;
+        while (r < rec.count()) {
+            Assert.isTrue(!m.has(u, rec.itemAt(r)));
+            r = r + 1;
+        }
+        TopNList all = TopN.recommend(im, m, u, m.itemCount(), true);
+        // With the opt-in, the user's own items reappear.
+        boolean foundSeen = false;
+        r = 0;
+        while (r < all.count()) {
+            if (m.has(u, all.itemAt(r))) { foundSeen = true; }
+            r = r + 1;
+        }
+        Assert.isTrue(foundSeen);
+        return;
+    }
+
+    // 8.1.5 + §12.2 — the harness reports every algorithm against the
+    // item-mean bar; GlobalMean fails it and is SAID to fail it.
+    @Test
+    public void harnessReportsAgainstTheBar() {
+        Interactions m = KnnTest.load("rs_knn_train");
+        Tensor<float64> tr = Fx.load("rs_knn_test_r");
+        int64 n = tr.shapeAt(0);
+        int64[] us = KnnTest.mapUsers(m, "rs_knn_test");
+        int64[] is = KnnTest.mapItems(m, "rs_knn_test");
+        float64[] rs = heap float64[n];
+        int64 t = 0;
+        while (t < n) { rs[t] = tr.flatGet(t); t = t + 1; }
+
+        RatingPredictor[] algos = heap RatingPredictor[3];
+        algos[0] = Baselines.globalMean();
+        algos[1] = Baselines.bias();
+        algos[2] = KnnCf.userBased("msd", (int64) 40, (int64) 1);
+        String[] names = heap String[3];
+        names[0] = "global-mean";
+        names[1] = "bias";
+        names[2] = "knn-user-msd";
+        Harness h = Harness.compare(algos, names, m, us, is, rs);
+        // On this fixture the structure is mostly ITEM biases, so
+        // item-mean is a strong bar (0.448): global-mean AND the bias
+        // model genuinely fail it — and the harness SAYS so, which is
+        // the entire point of 12.2. Only the knn model clears it.
+        Assert.isTrue(!h.beatsItemMean((int64) 0));    // reported as such
+        Assert.isTrue(!h.beatsItemMean((int64) 1));    // reported as such
+        Assert.isTrue(h.beatsItemMean((int64) 2));
+        Assert.isTrue(h.rmse((int64) 2) < h.itemMeanRmse());
+        return;
+    }
+
+    // 8.1.7 + 8.1.8 + §2.5 — splits: seeded interaction holdout is
+    // reproducible and support-guaranteed; the by-time split holds out
+    // the LATEST interactions and offers no shuffle.
+    @Test
+    public void splitsAreHonest() {
+        Tensor<float64> tu = Fx.load("rs_ratings_u");
+        Tensor<float64> ti = Fx.load("rs_ratings_i");
+        Tensor<float64> trr = Fx.load("rs_ratings_r");
+        int64 n = tu.shapeAt(0);
+        int64[] us = heap int64[n];
+        int64[] is = heap int64[n];
+        float64[] rs = heap float64[n];
+        int64[] times = heap int64[n];
+        int64 t = 0;
+        while (t < n) {
+            us[t] = (int64) tu.flatGet(t);
+            is[t] = (int64) ti.flatGet(t);
+            rs[t] = trr.flatGet(t);
+            times[t] = (int64) ((t * 37) % n);          // scrambled clock
+            t = t + 1;
+        }
+        RsSplit s1 = RsSplit.interactions(us, is, rs, 0.1, (uint64) 9);
+        RsSplit s2 = RsSplit.interactions(us, is, rs, 0.1, (uint64) 9);
+        Assert.equals((int64) s1.testU.count(), (int64) s2.testU.count());
+        t = 0;
+        while (t < (int64) s1.testU.count()) {
+            Assert.equals(s2.testU[t], s1.testU[t]);
+            Assert.equals(s2.testI[t], s1.testI[t]);
+            t = t + 1;
+        }
+        // Support guarantee: every held-out user and item still trains.
+        t = 0;
+        while (t < (int64) s1.testU.count()) {
+            boolean uSeen = false;
+            boolean iSeen = false;
+            int64 a = 0;
+            while (a < (int64) s1.trainU.count()) {
+                if (s1.trainU[a] == s1.testU[t]) { uSeen = true; }
+                if (s1.trainI[a] == s1.testI[t]) { iSeen = true; }
+                a = a + 1;
+            }
+            Assert.isTrue(uSeen);
+            Assert.isTrue(iSeen);
+            t = t + 1;
+        }
+        // Chronological: every train time precedes every test time.
+        RsSplit ct = RsSplit.byTime(us, is, rs, times, 0.2);
+        int64 maxTrain = -1;
+        t = 0;
+        while (t < (int64) ct.trainU.count()) {
+            int64 a = 0;
+            while (a < n) {
+                if (us[a] == ct.trainU[t] && is[a] == ct.trainI[t]) {
+                    if (times[a] > maxTrain) { maxTrain = times[a]; }
+                }
+                a = a + 1;
+            }
+            t = t + 1;
+        }
+        int64 minTest = n + 1;
+        t = 0;
+        while (t < (int64) ct.testU.count()) {
+            int64 a = 0;
+            while (a < n) {
+                if (us[a] == ct.testU[t] && is[a] == ct.testI[t]) {
+                    if (times[a] < minTest) { minTest = times[a]; }
+                }
+                a = a + 1;
+            }
+            t = t + 1;
+        }
+        Assert.isTrue(maxTrain <= minTest);
+        return;
+    }
+
+    // §9.6 — coverage: a constant recommender covers exactly k items.
+    @Test
+    public void coverageCountsTheCatalog() {
+        Interactions m = KnnTest.load("rs_knn_train");
+        GlobalMean g = Baselines.globalMean();
+        g.fit(m);
+        // GlobalMean ties everywhere → the same k items for every user.
+        int64 nU = m.userCount();
+        TopNList[] lists = heap TopNList[nU];
+        int64 u = 0;
+        while (u < nU) {
+            lists[u] = TopN.recommend(g, m, u, (int64) 3, true);
+            u = u + 1;
+        }
+        float64 cov = RankMetrics.coverage(lists, m.itemCount());
+        Assert.isTrue(Fx.close(cov, 3.0 / (float64) m.itemCount(),
+            0.000000000001));
+        return;
+    }
+}

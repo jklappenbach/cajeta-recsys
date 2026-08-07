@@ -1,0 +1,68 @@
+package dev.cajeta.recsys;
+
+/**
+ * The §12.2 comparison harness (plan 8.2.4): every algorithm is scored
+ * against the §3 baselines ON THE SAME SPLIT through
+ * {@link RatingScore}, and **an algorithm that fails to beat the
+ * item-mean baseline is reported as such** — printed, and queryable —
+ * rather than quietly listed among the results.
+ */
+public final class Harness {
+
+    float64[] rmses;
+    boolean[] beats;
+    float64 itemMeanRmse;
+
+    Harness(#float64[] rmses, #boolean[] beats, float64 itemMeanRmse) {
+        this.rmses #= rmses;
+        this.beats #= beats;
+        this.itemMeanRmse = itemMeanRmse;
+        return;
+    }
+
+    /**
+     * Fit-and-score every algorithm on the split (they arrive UNFITTED;
+     * the harness fits each on `train` so nothing can have seen the
+     * test triples), alongside the item-mean bar.
+     */
+    public static #Harness compare(RatingPredictor[] algos,
+                                   String[] names, Interactions train,
+                                   int64[] us, int64[] is, float64[] rs) {
+        int64 n = (int64) algos.count();
+        if ((int64) names.count() != n || n < 1) {
+            throw heap RsException("Harness: algos/names mismatch");
+        }
+        ItemMean bar = Baselines.itemMean();
+        bar.fit(train);
+        float64 barRmse = RatingScore.rmse(bar, us, is, rs);
+        float64[] rmses = heap float64[n];
+        boolean[] beats = heap boolean[n];
+        int64 a = 0;
+        while (a < n) {
+            RatingPredictor p = algos[a];
+            p.fit(train);
+            rmses[a] = RatingScore.rmse(p, us, is, rs);
+            beats[a] = rmses[a] < barRmse;
+            if (beats[a]) {
+                System.stdout.println("  " + names[a] + ": rmse "
+                    + rmses[a] + " (beats item-mean " + barRmse + ")");
+            } else {
+                System.stdout.println("  " + names[a] + ": rmse "
+                    + rmses[a] + " — DOES NOT BEAT item-mean ("
+                    + barRmse + ")");
+            }
+            a = a + 1;
+        }
+        Harness h = heap Harness(#rmses, #beats, barRmse);
+        return #h;
+    }
+
+    /** The item-mean bar every algorithm is measured against. */
+    public float64 itemMeanRmse() { return this.itemMeanRmse; }
+
+    /** The `a`-th algorithm's held-out RMSE. */
+    public float64 rmse(int64 a) { return this.rmses[a]; }
+
+    /** True when the `a`-th algorithm beat item-mean (§12.2). */
+    public boolean beatsItemMean(int64 a) { return this.beats[a]; }
+}
