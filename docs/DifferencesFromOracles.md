@@ -14,3 +14,16 @@ disagreement is recorded here.
   data bug upstream, because last-write-wins silently changes answers.
 - **A NaN rating is rejected at construction.** Missing is an ABSENT
   triple, never a NaN cell — one representation of "missing", not two.
+
+## Neighbourhood CF (spec §4)
+
+- **Degenerate-pair similarity follows Surprise, not the stdlib
+  doctrine.** `cajeta.math.distance` defines both-degenerate pairs
+  (both zero-norm / both constant) as similarity 1; Surprise's
+  similarities give 0 whenever the denominator vanishes. Here "we know
+  nothing about this pair" must not read as "perfectly similar", so the
+  Surprise policy is applied AROUND the stdlib kernels — the kernels
+  themselves are consumed verbatim for every well-posed pair.
+- **`msd` is the one similarity implemented locally** — Surprise's
+  `1/(msd+1)` is domain-specific and has no stdlib home; cosine and
+  Pearson math never appears in this library.

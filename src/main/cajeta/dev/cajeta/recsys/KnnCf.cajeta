@@ -1,0 +1,289 @@
+package dev.cajeta.recsys;
+
+/**
+ * Neighbourhood collaborative filtering (spec §4), matching Surprise's
+ * `KNNBasic` and (mean-centred, §4.7) `KNNWithMeans`. One
+ * implementation over an orientation flag (§4.4): user-based predicts
+ * from the `k` most similar users who rated the item; item-based
+ * transposes — the `k` most similar items the user rated.
+ *
+ * Fallback chain, documented (§4.6, §2.6): unknown user/item (`−1`) →
+ * global mean; no positive-similarity neighbour → global mean (basic)
+ * or the row's own mean (mean-centred, Surprise's behaviour); fewer
+ * than `k` qualifying neighbours → use those available, and
+ * {@link #predictDetail} reports how many were actually used rather
+ * than silently thinning. Predictions clip to the data's scale.
+ */
+public final class KnnCf implements RatingPredictor {
+
+    boolean itemBased;
+    int64 simKind;       // 0 cosine, 1 pearson, 2 msd
+    int64 k;
+    int64 minSupport;
+    boolean meanCentred;
+
+    // Adjacency copied out of the fitted matrix (no borrow retained).
+    int64[] uPtr;
+    int64[] uIt;
+    float64[] uVa;
+    int64[] iPtr;
+    int64[] iUs;
+    float64[] iVa;
+    int64 nUsers;
+    int64 nItems;
+    float64[] sims;      // (n, n) row-major over the oriented axis
+    float64[] rowMean;   // per user (or per item when itemBased)
+    float64 mu;
+    float64 lo;
+    float64 hi;
+    int64 n;
+    boolean fitted;
+    int64 lastUsed;
+
+    KnnCf(boolean itemBased, int64 simKind, int64 k, int64 minSupport) {
+        if (k < 1) {
+            throw heap RsException("KnnCf: k must be >= 1 (got " + k + ")");
+        }
+        if (minSupport < 1) {
+            throw heap RsException("KnnCf: minSupport must be >= 1");
+        }
+        this.itemBased = itemBased;
+        this.simKind = simKind;
+        this.k = k;
+        this.minSupport = minSupport;
+        this.meanCentred = false;
+        this.fitted = false;
+        return;
+    }
+
+    /** User-based k-NN with the named similarity (§4.3). */
+    public static #KnnCf userBased(String sim, int64 k, int64 minSupport) {
+        return heap KnnCf(false, KnnCf.simIndex(sim), k, minSupport);
+    }
+
+    /** Item-based k-NN — the same machinery transposed (§4.4). */
+    public static #KnnCf itemBased(String sim, int64 k, int64 minSupport) {
+        return heap KnnCf(true, KnnCf.simIndex(sim), k, minSupport);
+    }
+
+    static int64 simIndex(String sim) {
+        if (sim.equals("cosine")) { return 0; }
+        if (sim.equals("pearson")) { return 1; }
+        if (sim.equals("msd")) { return 2; }
+        throw heap RsException("KnnCf: similarity must be \"cosine\", "
+            + "\"pearson\", or \"msd\" (got \"" + sim + "\")");
+    }
+
+    /** Mean-centre ratings per row (§4.7, Surprise `KNNWithMeans`). */
+    public void setMeanCentred(boolean on) {
+        this.meanCentred = on;
+        return;
+    }
+
+    public void fit(Interactions m) {
+        this.mu = Baselines.observedMean(m);
+        this.copyAdjacency(m);
+        this.lo = m.minRating();
+        this.hi = m.maxRating();
+        int64 n;
+        if (this.itemBased) { n = m.itemCount(); }
+        else { n = m.userCount(); }
+        this.n = n;
+        float64[] s = heap float64[n * n];
+        int64 a = 0;
+        while (a < n) {
+            int64 b = a + 1;
+            while (b < n) {
+                float64 v;
+                if (this.simKind == 0) {
+                    v = Similarity.cosine(m, this.itemBased, a, b,
+                                          this.minSupport);
+                } else if (this.simKind == 1) {
+                    v = Similarity.pearson(m, this.itemBased, a, b,
+                                           this.minSupport);
+                } else {
+                    v = Similarity.msd(m, this.itemBased, a, b,
+                                       this.minSupport);
+                }
+                s[a * n + b] = v;
+                s[b * n + a] = v;
+                b = b + 1;
+            }
+            s[a * n + a] = 1.0;
+            a = a + 1;
+        }
+        this.sims #= s;
+
+        float64[] rm = heap float64[n];
+        int64 r = 0;
+        while (r < n) {
+            float64 acc = 0.0;
+            int64 cnt;
+            if (this.itemBased) { cnt = m.itemNnz(r); }
+            else { cnt = m.userNnz(r); }
+            int64 t = 0;
+            while (t < cnt) {
+                if (this.itemBased) { acc = acc + m.itemRatingAt(r, t); }
+                else { acc = acc + m.userRatingAt(r, t); }
+                t = t + 1;
+            }
+            rm[r] = acc / (float64) cnt;
+            r = r + 1;
+        }
+        this.rowMean #= rm;
+        this.fitted = true;
+        return;
+    }
+
+    void copyAdjacency(Interactions m) {
+        int64 nU = m.userCount();
+        int64 nI = m.itemCount();
+        this.nUsers = nU;
+        this.nItems = nI;
+        int64 nnz = m.count();
+        int64[] up = heap int64[nU + 1];
+        int64[] ui = heap int64[nnz];
+        float64[] uv = heap float64[nnz];
+        int64 pos = 0;
+        int64 u = 0;
+        while (u < nU) {
+            up[u] = pos;
+            int64 t = 0;
+            while (t < m.userNnz(u)) {
+                ui[pos] = m.userItemAt(u, t);
+                uv[pos] = m.userRatingAt(u, t);
+                pos = pos + 1;
+                t = t + 1;
+            }
+            u = u + 1;
+        }
+        up[nU] = pos;
+        int64[] ip = heap int64[nI + 1];
+        int64[] iu = heap int64[nnz];
+        float64[] iv = heap float64[nnz];
+        pos = 0;
+        int64 i = 0;
+        while (i < nI) {
+            ip[i] = pos;
+            int64 t = 0;
+            while (t < m.itemNnz(i)) {
+                iu[pos] = m.itemUserAt(i, t);
+                iv[pos] = m.itemRatingAt(i, t);
+                pos = pos + 1;
+                t = t + 1;
+            }
+            i = i + 1;
+        }
+        ip[nI] = pos;
+        this.uPtr #= up;
+        this.uIt #= ui;
+        this.uVa #= uv;
+        this.iPtr #= ip;
+        this.iUs #= iu;
+        this.iVa #= iv;
+        return;
+    }
+
+    public float64 predict(int64 u, int64 i) {
+        return this.estimate(u, i);
+    }
+
+    /**
+     * Prediction plus the number of neighbours actually used (§4.6) —
+     * fewer than `k` is REPORTED, never silently thinned.
+     */
+    public #KnnPrediction predictDetail(int64 u, int64 i) {
+        float64 est = this.estimate(u, i);
+        KnnPrediction p = heap KnnPrediction(est, this.lastUsed);
+        return #p;
+    }
+
+    float64 estimate(int64 u, int64 i) {
+        if (!this.fitted) {
+            throw heap RsException("KnnCf: predict before fit");
+        }
+        this.lastUsed = 0;
+        // Orient: x is the target row, and neighbours are rows that
+        // interacted with y.
+        int64 x;
+        int64 y;
+        if (this.itemBased) { x = i; y = u; }
+        else { x = u; y = i; }
+        if (x < 0 || x >= this.n || y < 0) { return this.clip(this.mu); }
+        int64 yCount;
+        if (this.itemBased) {
+            if (y >= this.nUsers) { return this.clip(this.mu); }
+            yCount = this.uPtr[y + 1] - this.uPtr[y];
+        } else {
+            if (y >= this.nItems) { return this.clip(this.mu); }
+            yCount = this.iPtr[y + 1] - this.iPtr[y];
+        }
+        // Candidates: (sim, rating, neighbour row). Top-k by similarity.
+        float64[] cSim = heap float64[yCount];
+        float64[] cVal = heap float64[yCount];
+        int64[] cRow = heap int64[yCount];
+        int64 t = 0;
+        while (t < yCount) {
+            int64 v;
+            float64 r;
+            if (this.itemBased) {
+                v = this.uIt[this.uPtr[y] + t];    // an item y rated
+                r = this.uVa[this.uPtr[y] + t];
+            } else {
+                v = this.iUs[this.iPtr[y] + t];    // a user who rated y
+                r = this.iVa[this.iPtr[y] + t];
+            }
+            cSim[t] = this.sims[x * this.n + v];
+            cVal[t] = r;
+            cRow[t] = v;
+            t = t + 1;
+        }
+        // Selection sort of the top min(k, yCount) by similarity.
+        int64 top = this.k;
+        if (yCount < top) { top = yCount; }
+        int64 s = 0;
+        while (s < top) {
+            int64 best = s;
+            int64 c = s + 1;
+            while (c < yCount) {
+                if (cSim[c] > cSim[best]) { best = c; }
+                c = c + 1;
+            }
+            float64 ts = cSim[s]; cSim[s] = cSim[best]; cSim[best] = ts;
+            float64 tv = cVal[s]; cVal[s] = cVal[best]; cVal[best] = tv;
+            int64 tr = cRow[s]; cRow[s] = cRow[best]; cRow[best] = tr;
+            s = s + 1;
+        }
+        float64 sumSim = 0.0;
+        float64 sumVal = 0.0;
+        int64 used = 0;
+        t = 0;
+        while (t < top) {
+            if (cSim[t] > 0.0) {
+                sumSim = sumSim + cSim[t];
+                if (this.meanCentred) {
+                    sumVal = sumVal
+                        + cSim[t] * (cVal[t] - this.rowMean[cRow[t]]);
+                } else {
+                    sumVal = sumVal + cSim[t] * cVal[t];
+                }
+                used = used + 1;
+            }
+            t = t + 1;
+        }
+        this.lastUsed = used;
+        if (this.meanCentred) {
+            float64 est = this.rowMean[x];
+            if (used > 0) { est = est + sumVal / sumSim; }
+            return this.clip(est);
+        }
+        if (used == 0) { return this.clip(this.mu); }
+        return this.clip(sumVal / sumSim);
+    }
+
+    float64 clip(float64 v) {
+        if (v < this.lo) { return this.lo; }
+        if (v > this.hi) { return this.hi; }
+        return v;
+    }
+}

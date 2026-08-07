@@ -1,0 +1,226 @@
+package dev.cajeta.recsys.selftest;
+
+import dev.cajeta.unit.Assert;
+import cajeta.math.Tensor;
+import dev.cajeta.recsys.Baselines;
+import dev.cajeta.recsys.GlobalMean;
+import dev.cajeta.recsys.Interactions;
+import dev.cajeta.recsys.KnnCf;
+import dev.cajeta.recsys.KnnPrediction;
+import dev.cajeta.recsys.RatingScore;
+import dev.cajeta.recsys.Similarity;
+
+/**
+ * ml-recsys U3 — neighbourhood CF against Surprise 1.1.5: KNNBasic and
+ * KNNWithMeans parity across similarities and orientations (3.1.1),
+ * kernels from `cajeta.math.distance` over CO-RATED entries only
+ * (3.1.2–3.1.3), the min-support gate (3.1.4), neighbourhood
+ * accounting (3.1.5), and the users≫items asymmetry that motivates the
+ * item-based orientation (3.1.6).
+ */
+public class KnnTest {
+
+    public KnnTest() { return; }
+
+    static #Interactions load(String prefix) {
+        Tensor<float64> tu = Fx.load(prefix + "_u");
+        Tensor<float64> ti = Fx.load(prefix + "_i");
+        Tensor<float64> tr = Fx.load(prefix + "_r");
+        int64 n = tu.shapeAt(0);
+        String[] us = heap String[n];
+        String[] is = heap String[n];
+        float64[] rs = heap float64[n];
+        int64 t = 0;
+        while (t < n) {
+            us[t] = "" + (int64) tu.flatGet(t);
+            is[t] = "" + (int64) ti.flatGet(t);
+            rs[t] = tr.flatGet(t);
+            t = t + 1;
+        }
+        return Interactions.of(us, is, rs);
+    }
+
+    static #int64[] mapUsers(Interactions m, String prefix) {
+        Tensor<float64> tu = Fx.load(prefix + "_u");
+        int64 n = tu.shapeAt(0);
+        int64[] out = heap int64[n];
+        int64 t = 0;
+        while (t < n) {
+            out[t] = m.userIndex("" + (int64) tu.flatGet(t));
+            Assert.isTrue(out[t] >= 0);
+            t = t + 1;
+        }
+        return #out;
+    }
+
+    static #int64[] mapItems(Interactions m, String prefix) {
+        Tensor<float64> ti = Fx.load(prefix + "_i");
+        int64 n = ti.shapeAt(0);
+        int64[] out = heap int64[n];
+        int64 t = 0;
+        while (t < n) {
+            out[t] = m.itemIndex("" + (int64) ti.flatGet(t));
+            Assert.isTrue(out[t] >= 0);
+            t = t + 1;
+        }
+        return #out;
+    }
+
+    static void assertEst(KnnCf f, Interactions m, String estFixture) {
+        int64[] us = KnnTest.mapUsers(m, "rs_knn_test");
+        int64[] is = KnnTest.mapItems(m, "rs_knn_test");
+        Tensor<float64> want = Fx.load(estFixture);
+        int64 t = 0;
+        while (t < (int64) us.count()) {
+            Assert.isTrue(Fx.close(f.predict(us[t], is[t]),
+                want.flatGet(t), 0.00000001));
+            t = t + 1;
+        }
+        return;
+    }
+
+    // 3.1.1 — KNNBasic (cosine user, msd user, msd item) and
+    // KNNWithMeans (pearson user) all match Surprise est for est.
+    @Test
+    public void surpriseParityAcrossConfigs() {
+        Interactions m = KnnTest.load("rs_knn_train");
+
+        KnnCf uc = KnnCf.userBased("cosine", (int64) 40, (int64) 1);
+        uc.fit(m);
+        KnnTest.assertEst(uc, m, "rs_knn_user_cosine_est");
+
+        KnnCf um = KnnCf.userBased("msd", (int64) 40, (int64) 1);
+        um.fit(m);
+        KnnTest.assertEst(um, m, "rs_knn_user_msd_est");
+
+        KnnCf im = KnnCf.itemBased("msd", (int64) 40, (int64) 1);
+        im.fit(m);
+        KnnTest.assertEst(im, m, "rs_knn_item_msd_est");
+
+        KnnCf pm = KnnCf.userBased("pearson", (int64) 40, (int64) 1);
+        pm.setMeanCentred(true);
+        pm.fit(m);
+        KnnTest.assertEst(pm, m, "rs_knn_user_pearson_means_est");
+        return;
+    }
+
+    // 3.1.3 + 3.1.4 — similarity over co-rated entries only (the two
+    // users agree perfectly on their shared items even though their
+    // zero-filled vectors differ), and the min-support gate zeroes a
+    // pair with too few co-ratings.
+    @Test
+    public void coRatedOnlyAndMinSupport() {
+        String[] us = heap String[5];
+        String[] is = heap String[5];
+        float64[] rs = heap float64[5];
+        us[0] = "a"; is[0] = "i1"; rs[0] = 5.0;
+        us[1] = "a"; is[1] = "i2"; rs[1] = 3.0;
+        us[2] = "a"; is[2] = "i3"; rs[2] = 1.0;
+        us[3] = "b"; is[3] = "i1"; rs[3] = 5.0;
+        us[4] = "b"; is[4] = "i2"; rs[4] = 3.0;
+        Interactions m = Interactions.of(us, is, rs);
+        // Co-rated {i1, i2}: identical ratings → cosine exactly 1. A
+        // zero-filled treatment would see (5,3,1)·(5,3,0) and disagree.
+        float64 s = Similarity.cosine(m, false, (int64) 0, (int64) 1,
+                                      (int64) 1);
+        Assert.isTrue(s == 1.0);
+        // min-support 3: two shared items are not enough — the pair is
+        // OUT, not "perfectly similar".
+        float64 s3 = Similarity.cosine(m, false, (int64) 0, (int64) 1,
+                                       (int64) 3);
+        Assert.isTrue(s3 == 0.0);
+        // No co-rated items at all → 0, never NaN (§4.2).
+        String[] us2 = heap String[2];
+        String[] is2 = heap String[2];
+        float64[] rs2 = heap float64[2];
+        us2[0] = "a"; is2[0] = "i1"; rs2[0] = 4.0;
+        us2[1] = "b"; is2[1] = "i2"; rs2[1] = 2.0;
+        Interactions m2 = Interactions.of(us2, is2, rs2);
+        float64 s0 = Similarity.pearson(m2, false, (int64) 0, (int64) 1,
+                                        (int64) 1);
+        Assert.isTrue(s0 == 0.0);
+        return;
+    }
+
+    // 3.1.5 — the neighbourhood accounting: fewer than k qualifying
+    // neighbours is REPORTED; the fallback chain answers when none
+    // qualify.
+    @Test
+    public void neighbourhoodAccounting() {
+        Interactions m = KnnTest.load("rs_knn_train");
+        KnnCf f = KnnCf.userBased("msd", (int64) 3, (int64) 1);
+        f.fit(m);
+        KnnPrediction p = f.predictDetail((int64) 0, (int64) 0);
+        Assert.isTrue(p.neighborsUsed >= 1 && p.neighborsUsed <= 3);
+        // Unknown item: the chain answers with the global mean and
+        // reports ZERO neighbours — nothing was silently thinned.
+        KnnPrediction q = f.predictDetail((int64) 0, (int64) -1);
+        Assert.equals(q.neighborsUsed, (int64) 0);
+        GlobalMean g = Baselines.globalMean();
+        g.fit(m);
+        Assert.isTrue(Fx.close(q.estimate, g.predict((int64) 0, (int64) 0),
+            0.0000000001));
+        return;
+    }
+
+    // 3.1.6 — the asymmetry fixture (300 users ≫ 60 items, 4 ratings
+    // each): item-based beats user-based, and both match Surprise.
+    @Test
+    public void itemBasedBeatsUserBasedWhenUsersOutnumberItems() {
+        Interactions m = KnnTest.load("rs_asym_train");
+        Tensor<float64> tr = Fx.load("rs_asym_test_r");
+        int64 n = tr.shapeAt(0);
+        int64[] us = KnnTest.mapUsers(m, "rs_asym_test");
+        int64[] is = KnnTest.mapItems(m, "rs_asym_test");
+        float64[] rs = heap float64[n];
+        int64 t = 0;
+        while (t < n) { rs[t] = tr.flatGet(t); t = t + 1; }
+
+        KnnCf ub = KnnCf.userBased("msd", (int64) 40, (int64) 1);
+        ub.fit(m);
+        KnnCf ib = KnnCf.itemBased("msd", (int64) 40, (int64) 1);
+        ib.fit(m);
+
+        // Parity with Surprise on this fixture too.
+        Tensor<float64> wu = Fx.load("rs_asym_user_est");
+        Tensor<float64> wi = Fx.load("rs_asym_item_est");
+        t = 0;
+        while (t < n) {
+            Assert.isTrue(Fx.close(ub.predict(us[t], is[t]), wu.flatGet(t),
+                0.00000001));
+            Assert.isTrue(Fx.close(ib.predict(us[t], is[t]), wi.flatGet(t),
+                0.00000001));
+            t = t + 1;
+        }
+        float64 ru = RatingScore.rmse(ub, us, is, rs);
+        float64 ri = RatingScore.rmse(ib, us, is, rs);
+        System.stdout.println("asymmetry rmse: user=" + ru + " item=" + ri);
+        Assert.isTrue(ri < ru);
+        return;
+    }
+
+    // 3.3.2 — the model beats the §3 baselines on the same split,
+    // through the shared scoring entry.
+    @Test
+    public void beatsTheBaselines() {
+        Interactions m = KnnTest.load("rs_knn_train");
+        Tensor<float64> tr = Fx.load("rs_knn_test_r");
+        int64 n = tr.shapeAt(0);
+        int64[] us = KnnTest.mapUsers(m, "rs_knn_test");
+        int64[] is = KnnTest.mapItems(m, "rs_knn_test");
+        float64[] rs = heap float64[n];
+        int64 t = 0;
+        while (t < n) { rs[t] = tr.flatGet(t); t = t + 1; }
+
+        KnnCf um = KnnCf.userBased("msd", (int64) 40, (int64) 1);
+        um.fit(m);
+        GlobalMean g = Baselines.globalMean();
+        g.fit(m);
+        float64 rk = RatingScore.rmse(um, us, is, rs);
+        float64 rg = RatingScore.rmse(g, us, is, rs);
+        System.stdout.println("knn-vs-baseline rmse: knn=" + rk
+            + " global=" + rg);
+        Assert.isTrue(rk < rg);
+        return;
+    }
+}

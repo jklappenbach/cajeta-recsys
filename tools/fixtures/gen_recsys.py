@@ -99,10 +99,134 @@ def gen_baselines():
     save("rs_baseline_bi", bi)
 
 
+def gen_knn():
+    """U3 — neighbourhood CF vs Surprise KNNBasic/KNNWithMeans.
+
+    An interaction split (§2.5): 20 held-out ratings whose user AND item
+    both still appear in training, so no accidental cold start. Three
+    pinned configs on the train set, est saved over the test pairs. The
+    3.1.6 asymmetry claim (item-based beats user-based when users
+    outnumber items) is VERIFIED here before the fixture is trusted.
+    """
+    from surprise import KNNBasic, KNNWithMeans
+
+    us, its, rs, n_u, n_i = ratings_fixture()
+    rng = np.random.default_rng(202)
+    order = rng.permutation(len(rs))
+    test_idx = []
+    for t in order:
+        if len(test_idx) == 20:
+            break
+        rest = [x for x in range(len(rs)) if x not in test_idx and x != t]
+        if any(us[x] == us[t] for x in rest) and \
+           any(its[x] == its[t] for x in rest):
+            test_idx.append(int(t))
+    train_idx = [x for x in range(len(rs)) if x not in test_idx]
+    tu, ti, tr = us[train_idx], its[train_idx], rs[train_idx]
+    vu, vi, vr = us[test_idx], its[test_idx], rs[test_idx]
+    save("rs_knn_train_u", tu)
+    save("rs_knn_train_i", ti)
+    save("rs_knn_train_r", tr)
+    save("rs_knn_test_u", vu)
+    save("rs_knn_test_i", vi)
+    save("rs_knn_test_r", vr)
+
+    ts = surprise_trainset(tu, ti, tr)
+
+    def ests(algo):
+        algo.fit(ts)
+        return np.array([algo.predict(str(int(u)), str(int(i))).est
+                         for u, i in zip(vu, vi)])
+
+    e_uc = ests(KNNBasic(k=40, sim_options={"name": "cosine",
+                                            "user_based": True,
+                                            "min_support": 1},
+                         verbose=False))
+    save("rs_knn_user_cosine_est", e_uc)
+    e_im = ests(KNNBasic(k=40, sim_options={"name": "msd",
+                                            "user_based": False,
+                                            "min_support": 1},
+                         verbose=False))
+    save("rs_knn_item_msd_est", e_im)
+    e_um = ests(KNNBasic(k=40, sim_options={"name": "msd",
+                                            "user_based": True,
+                                            "min_support": 1},
+                         verbose=False))
+    save("rs_knn_user_msd_est", e_um)
+    e_pm = ests(KNNWithMeans(k=40, sim_options={"name": "pearson",
+                                                "user_based": True,
+                                                "min_support": 1},
+                             verbose=False))
+    save("rs_knn_user_pearson_means_est", e_pm)
+
+    # 3.1.6 needs its own fixture: two item genres × two user camps, each
+    # user rating only 4 of 12 items — user-user co-rating support is
+    # thin (camp detection noisy) while item-item support is dense
+    # (same-genre items correlate across ALL users). Verified before the
+    # fixture is trusted.
+    # The regime that produces it (found empirically): 300 users x 60
+    # items x 4 ratings each. User-pair co-rating overlap ~0.27 items
+    # (user-user similarity mostly nonexistent or one-sample noise);
+    # item-pair support ~6.7 co-raters (item-item similarity reliable).
+    rng2 = np.random.default_rng(303)
+    n_u2, n_i2 = 300, 60
+    au, ai, ar = [], [], []
+    for u in range(n_u2):
+        camp = u % 2
+        items = rng2.choice(n_i2, 4, replace=False)
+        for i in items:
+            genre = 0 if i < n_i2 // 2 else 1
+            base = 4.0 if genre == camp else 2.0
+            r = float(np.clip(np.round((base
+                + rng2.normal(0, 0.4)) * 2) / 2, 1.0, 5.0))
+            au.append(u); ai.append(int(i)); ar.append(r)
+    au = np.array(au, dtype=np.float64)
+    ai = np.array(ai, dtype=np.float64)
+    ar = np.array(ar, dtype=np.float64)
+    order2 = rng2.permutation(len(ar))
+    a_test = []
+    for t in order2:
+        if len(a_test) == 30:
+            break
+        rest = [x for x in range(len(ar)) if x not in a_test and x != t]
+        if any(au[x] == au[t] for x in rest) and \
+           any(ai[x] == ai[t] for x in rest):
+            a_test.append(int(t))
+    a_train = [x for x in range(len(ar)) if x not in a_test]
+    save("rs_asym_train_u", au[a_train])
+    save("rs_asym_train_i", ai[a_train])
+    save("rs_asym_train_r", ar[a_train])
+    save("rs_asym_test_u", au[a_test])
+    save("rs_asym_test_i", ai[a_test])
+    save("rs_asym_test_r", ar[a_test])
+    ts2 = surprise_trainset(au[a_train], ai[a_train], ar[a_train])
+
+    def ests2(algo):
+        algo.fit(ts2)
+        return np.array([algo.predict(str(int(u)), str(int(i))).est
+                         for u, i in zip(au[a_test], ai[a_test])])
+
+    e2_i = ests2(KNNBasic(k=40, sim_options={"name": "msd",
+                                             "user_based": False,
+                                             "min_support": 1},
+                          verbose=False))
+    e2_u = ests2(KNNBasic(k=40, sim_options={"name": "msd",
+                                             "user_based": True,
+                                             "min_support": 1},
+                          verbose=False))
+    save("rs_asym_item_est", e2_i)
+    save("rs_asym_user_est", e2_u)
+    rmse_u = float(np.sqrt(np.mean((e2_u - ar[a_test]) ** 2)))
+    rmse_i = float(np.sqrt(np.mean((e2_i - ar[a_test]) ** 2)))
+    print(f"  [check] asym: user rmse {rmse_u:.4f} vs item {rmse_i:.4f}")
+    assert rmse_i < rmse_u, "3.1.6 asymmetry does not hold on this fixture"
+
+
 def main():
     print(f"surprise {surprise.__version__} / sklearn {sklearn.__version__} "
           f"fixtures -> {OUT}")
     gen_baselines()
+    gen_knn()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,23 @@
+package dev.cajeta.recsys;
+
+/**
+ * A k-NN prediction with its neighbourhood accounting (spec §4.6): the
+ * estimate, and how many positive-similarity neighbours actually
+ * contributed — fewer than `k` is reported here, never silently
+ * thinned. Zero neighbours means the estimate came from the fallback
+ * chain.
+ */
+public final class KnnPrediction {
+
+    /** The predicted rating (clipped to the data's scale). */
+    public float64 estimate;
+
+    /** Positive-similarity neighbours actually used. */
+    public int64 neighborsUsed;
+
+    KnnPrediction(float64 estimate, int64 neighborsUsed) {
+        this.estimate = estimate;
+        this.neighborsUsed = neighborsUsed;
+        return;
+    }
+}

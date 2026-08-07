@@ -1,0 +1,148 @@
+package dev.cajeta.recsys;
+
+import cajeta.math.Tensor;
+import cajeta.math.distance.Distance;
+
+/**
+ * Pairwise user/user or item/item similarity (spec §4.1–§4.2, §4.5),
+ * computed over **co-rated entries only** — never over zero-filled
+ * vectors, which is §12.1's trap in its most common form. The co-rated
+ * sub-vectors are compacted here; the cosine and Pearson KERNELS are
+ * `cajeta.math.distance`'s (§4.1 — no similarity math lives in this
+ * library). Mean-squared-difference is the one domain-specific measure
+ * (Surprise's `msd`): `1 / (msd + 1)`.
+ *
+ * Degenerate-pair policy — Surprise's, applied around the stdlib
+ * kernels and recorded in DifferencesFromOracles.md: no co-rated
+ * entries → 0 (§4.2, defined rather than NaN); fewer than `minSupport`
+ * co-rated → 0 (§4.5); a zero denominator (constant or zero-norm
+ * co-rated vector) → 0. The stdlib's own both-degenerate doctrine
+ * (similarity 1) is deliberately NOT used here, because "we know
+ * nothing about this pair" must not read as "perfectly similar".
+ */
+public final class Similarity {
+
+    /** Cosine over co-rated entries; rows are users or items. */
+    public static float64 cosine(Interactions m, boolean itemBased,
+                                 int64 a, int64 b, int64 minSupport) {
+        float64[] pair = Similarity.corated(m, itemBased, a, b);
+        int64 n = (int64) pair.count() / 2;
+        if (n < minSupport || n == 0) { return 0.0; }
+        if (Similarity.zeroNorm(pair, (int64) 0, n)
+            || Similarity.zeroNorm(pair, n, n)) {
+            return 0.0;
+        }
+        return Distance.cosineSimilarity(
+            Similarity.half(pair, (int64) 0, n),
+            Similarity.half(pair, n, n));
+    }
+
+    /** Pearson correlation over co-rated entries. */
+    public static float64 pearson(Interactions m, boolean itemBased,
+                                  int64 a, int64 b, int64 minSupport) {
+        float64[] pair = Similarity.corated(m, itemBased, a, b);
+        int64 n = (int64) pair.count() / 2;
+        if (n < minSupport || n == 0) { return 0.0; }
+        if (Similarity.constant(pair, (int64) 0, n)
+            || Similarity.constant(pair, n, n)) {
+            return 0.0;
+        }
+        return Distance.pearson(
+            Similarity.half(pair, (int64) 0, n),
+            Similarity.half(pair, n, n));
+    }
+
+    /** Surprise's msd similarity `1/(msd+1)` over co-rated entries. */
+    public static float64 msd(Interactions m, boolean itemBased,
+                              int64 a, int64 b, int64 minSupport) {
+        float64[] pair = Similarity.corated(m, itemBased, a, b);
+        int64 n = (int64) pair.count() / 2;
+        if (n < minSupport || n == 0) { return 0.0; }
+        float64 acc = 0.0;
+        int64 t = 0;
+        while (t < n) {
+            float64 d = pair[t] - pair[n + t];
+            acc = acc + d * d;
+            t = t + 1;
+        }
+        return 1.0 / (acc / (float64) n + 1.0);
+    }
+
+    /**
+     * The co-rated ratings of rows `a` and `b`: a flat `[2n]` buffer,
+     * `a`'s half then `b`'s half, via a merge of the two sorted
+     * adjacency slices. `itemBased` compares items (over shared users);
+     * otherwise users (over shared items).
+     */
+    static #float64[] corated(Interactions m, boolean itemBased,
+                              int64 a, int64 b) {
+        int64 na;
+        int64 nb;
+        if (itemBased) { na = m.itemNnz(a); nb = m.itemNnz(b); }
+        else { na = m.userNnz(a); nb = m.userNnz(b); }
+        float64[] buf = heap float64[(na < nb ? na : nb) * 2];
+        int64 got = 0;
+        int64 x = 0;
+        int64 y = 0;
+        while (x < na && y < nb) {
+            int64 ka;
+            int64 kb;
+            if (itemBased) {
+                ka = m.itemUserAt(a, x);
+                kb = m.itemUserAt(b, y);
+            } else {
+                ka = m.userItemAt(a, x);
+                kb = m.userItemAt(b, y);
+            }
+            if (ka == kb) {
+                if (itemBased) {
+                    buf[got] = m.itemRatingAt(a, x);
+                    buf[buf.count() / 2 + got] = m.itemRatingAt(b, y);
+                } else {
+                    buf[got] = m.userRatingAt(a, x);
+                    buf[buf.count() / 2 + got] = m.userRatingAt(b, y);
+                }
+                got = got + 1;
+                x = x + 1;
+                y = y + 1;
+            } else if (ka < kb) { x = x + 1; }
+            else { y = y + 1; }
+        }
+        // Compact to exactly [2*got].
+        float64[] out = heap float64[got * 2];
+        int64 half = (int64) buf.count() / 2;
+        int64 t = 0;
+        while (t < got) {
+            out[t] = buf[t];
+            out[got + t] = buf[half + t];
+            t = t + 1;
+        }
+        return #out;
+    }
+
+    static #Tensor<float64> half(float64[] pair, int64 off, int64 n) {
+        float64[] a = heap float64[n];
+        int64 t = 0;
+        while (t < n) { a[t] = pair[off + t]; t = t + 1; }
+        int64[] sh = heap int64[1]; sh[0] = n;
+        return Tensor.of<float64>(a, sh);
+    }
+
+    static boolean zeroNorm(float64[] pair, int64 off, int64 n) {
+        int64 t = 0;
+        while (t < n) {
+            if (pair[off + t] != 0.0) { return false; }
+            t = t + 1;
+        }
+        return true;
+    }
+
+    static boolean constant(float64[] pair, int64 off, int64 n) {
+        int64 t = 1;
+        while (t < n) {
+            if (pair[off + t] != pair[off]) { return false; }
+            t = t + 1;
+        }
+        return true;
+    }
+}
