@@ -1,0 +1,178 @@
+package dev.cajeta.recsys.selftest;
+
+import dev.cajeta.unit.Assert;
+import cajeta.math.Tensor;
+import dev.cajeta.recsys.Mssa;
+import dev.cajeta.recsys.RsException;
+import dev.cajeta.timeseries.Adf;
+import dev.cajeta.timeseries.AdfResult;
+import dev.cajeta.timeseries.MovingAverageForecaster;
+import dev.cajeta.timeseries.Series;
+
+/**
+ * ml-recsys U7 — matrix estimation over time series: the trajectory
+ * transform is `dev.cajeta.timeseries`' (7.1.6 — consumed, verified by
+ * absence of any dense Hankel math here), the default window is `⌊√T⌋`
+ * (7.1.2), missing values become missing CELLS that completion fills
+ * (7.1.3 — imputation and forecasting are the same operation), the
+ * forecast extends the matrix and maps back (7.1.4), and a
+ * NON-stationary series forecasts without differencing (7.1.5 — the
+ * comparison that justifies the feature, certified non-stationary by
+ * the timeseries library's own ADF).
+ */
+public class MssaTest {
+
+    public MssaTest() { return; }
+
+    /** amplitude·sin(2πt/24) + slope·t — rank ≈ 3 in trajectory space. */
+    static #Series wave(int64 n, float64 amplitude, float64 slope) {
+        float64[] a = heap float64[n];
+        int64 t = 0;
+        while (t < n) {
+            a[t] = amplitude * Math.sin(2.0 * 3.141592653589793
+                    * (float64) t / 24.0) + slope * (float64) t;
+            t = t + 1;
+        }
+        int64[] sh = heap int64[1]; sh[0] = n;
+        return Series.of(Tensor.of<float64>(a, sh));
+    }
+
+    // 7.1.2 — the default window is ⌊√T⌋.
+    @Test
+    public void defaultWindowIsSqrtT() {
+        Series s = MssaTest.wave((int64) 144, 3.0, 0.0);
+        Mssa m = heap Mssa((int64) 2);
+        m.fit(s);
+        Assert.equals(m.fittedWindow(), (int64) 12);
+        boolean threw = false;
+        try {
+            Mssa bad = heap Mssa((int64) 1, (int64) 2);
+        } catch (RsException ex) { threw = true; }
+        Assert.isTrue(threw);
+        return;
+    }
+
+    // 7.1.3 — missing series values are missing CELLS; rank-2 completion
+    // recovers them (imputation == forecasting machinery).
+    @Test
+    public void missingValuesAreImputedByCompletion() {
+        int64 n = 144;
+        Series clean = MssaTest.wave(n, 3.0, 0.0);
+        float64[] holed = heap float64[n];
+        int64 t = 0;
+        while (t < n) { holed[t] = clean.get(t); t = t + 1; }
+        // Knock out 12 scattered interior values.
+        int64 h = 0;
+        while (h < 12) {
+            holed[17 + h * 9] = Series.missing();
+            h = h + 1;
+        }
+        int64[] sh = heap int64[1]; sh[0] = n;
+        Series s = Series.of(Tensor.of<float64>(holed, sh));
+        Assert.equals(s.missingCount(), (int64) 12);
+
+        Mssa m = heap Mssa((int64) 12, (int64) 2);
+        m.fit(s);
+        Series est = m.estimate((int64) 0);
+        // At every knocked-out position the imputation lands on the
+        // clean signal.
+        h = 0;
+        while (h < 12) {
+            int64 p = 17 + h * 9;
+            Assert.isTrue(Fx.close(est.get(p), clean.get(p), 0.15));
+            h = h + 1;
+        }
+        return;
+    }
+
+    // 7.1.4 — the forecast extends the completed matrix and maps back:
+    // it tracks the true continuation, and the index continues.
+    @Test
+    public void forecastExtendsAndMapsBack() {
+        int64 n = 144;
+        int64 h = 12;
+        Series full = MssaTest.wave(n + h, 3.0, 0.0);
+        Series train = MssaTest.wave(n, 3.0, 0.0);
+        Mssa m = heap Mssa((int64) 12, (int64) 2);
+        m.fit(train);
+        Series fc = m.forecast((int64) 0, h);
+        Assert.equals(fc.count(), h);
+        Assert.equals(fc.indexAt((int64) 0), n);
+        int64 t = 0;
+        while (t < h) {
+            Assert.isTrue(Fx.close(fc.get(t), full.get(n + t), 0.2));
+            t = t + 1;
+        }
+        return;
+    }
+
+    // 7.1.5 + §10.5 — the justifying comparison: a trending series the
+    // timeseries library's OWN ADF calls non-stationary is forecast
+    // WITHOUT differencing, and beats the naive baseline.
+    @Test
+    public void nonStationarySeriesNeedsNoDifferencing() {
+        int64 n = 144;
+        int64 h = 12;
+        Series full = MssaTest.wave(n + h, 3.0, 0.05);
+        Series train = MssaTest.wave(n, 3.0, 0.05);
+        AdfResult adf = Adf.test(train);
+        Assert.isTrue(!adf.isStationary(0.05));        // certified trending
+
+        Mssa m = heap Mssa((int64) 12, (int64) 4);     // trend costs rank
+        m.fit(train);
+        Series fc = m.forecast((int64) 0, h);
+        float64 errM = 0.0;
+        int64 t = 0;
+        while (t < h) {
+            float64 d = fc.get(t) - full.get(n + t);
+            errM = errM + d * d;
+            t = t + 1;
+        }
+        MovingAverageForecaster base = heap MovingAverageForecaster((int64) 12);
+        base.fit(train);
+        Series bf = base.forecast(h);
+        float64 errB = 0.0;
+        t = 0;
+        while (t < h) {
+            float64 d = bf.get(t) - full.get(n + t);
+            errB = errB + d * d;
+            t = t + 1;
+        }
+        System.stdout.println("mssa sse=" + errM + " baseline sse=" + errB);
+        Assert.isTrue(errM < errB);
+        return;
+    }
+
+    // §10.6 + §10.7 — multivariate: two phase-shifted copies share the
+    // latent rank; the joint estimate denoises both, and the retained
+    // spectrum has exactly `rank` values.
+    @Test
+    public void multivariateSharesRank() {
+        int64 n = 144;
+        float64[] a = heap float64[n];
+        float64[] b = heap float64[n];
+        int64 t = 0;
+        while (t < n) {
+            float64 ph = 2.0 * 3.141592653589793 * (float64) t / 24.0;
+            a[t] = 3.0 * Math.sin(ph);
+            b[t] = 2.0 * Math.sin(ph + 0.7);
+            t = t + 1;
+        }
+        int64[] sh = heap int64[1]; sh[0] = n;
+        Series[] ss = heap Series[2];
+        ss[0] = Series.of(Tensor.of<float64>(a, sh));
+        ss[1] = Series.of(Tensor.of<float64>(b, sh));
+        Mssa m = heap Mssa((int64) 12, (int64) 2);
+        m.fitAll(ss);
+        Assert.equals((int64) m.singularValues().count(), (int64) 2);
+        Series e0 = m.estimate((int64) 0);
+        Series e1 = m.estimate((int64) 1);
+        t = 0;
+        while (t < n) {
+            Assert.isTrue(Fx.close(e0.get(t), a[t], 0.05));
+            Assert.isTrue(Fx.close(e1.get(t), b[t], 0.05));
+            t = t + 1;
+        }
+        return;
+    }
+}

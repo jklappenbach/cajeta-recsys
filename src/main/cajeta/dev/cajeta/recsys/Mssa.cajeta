@@ -1,0 +1,377 @@
+package dev.cajeta.recsys;
+
+import cajeta.math.Tensor;
+import cajeta.math.linalg.LinAlg;
+import dev.cajeta.timeseries.Series;
+
+/**
+ * Matrix estimation over time series — (m)SSA (spec §10): a series
+ * becomes a trajectory (Hankel) matrix, the matrix is COMPLETED at a
+ * chosen rank, and imputation and forecasting become the same
+ * operation. **No stationarity is assumed** (§10.5) — a trend is just
+ * more rank — where `dev.cajeta.timeseries`' ARIMA path (its spec §4)
+ * requires differencing first; choose between them knowingly.
+ *
+ * Ownership (§10.1, roadmap §5.3, confirmed at implementation — plan
+ * 7.2.3): the DENSE Hankel transform is `Series.trajectoryMatrix`,
+ * owned by dev.cajeta.timeseries and consumed here verbatim. A series
+ * WITH missing values cannot pass through it (timeseries rejects
+ * missing by policy), so for that case the same `[i + j]` Hankel
+ * indexing places the OBSERVED entries into masked cells here — the
+ * missing-cell placement is recsys' (it is this domain's "interaction
+ * matrix over time"), the transform itself stays timeseries'.
+ *
+ * Completion: truncated SVD at `rank` when complete; hard-impute EM
+ * (fill → truncate → refill missing from the reconstruction, iterated)
+ * when cells are missing. Deterministic — no RNG anywhere (§12.5).
+ * Multivariate (§10.6): several same-length series stack their
+ * trajectory matrices column-wise and share the latent `rank` (§10.7:
+ * a small rank smooths, a large one follows the data).
+ *
+ * Forecasting (§10.4): the classical SSA linear recurrence — the last
+ * trajectory row regressed on the rows above it across columns — rolls
+ * the completed matrix forward; results map back to series order with
+ * the index continuing.
+ */
+public final class Mssa {
+
+    int64 window;        // 0 → default √T at fit
+    int64 rank;
+
+    int64 L;
+    int64 K;             // columns per series
+    int64 nSeries;
+    int64 T;
+    float64[] recon;     // (L, nSeries*K) row-major
+    float64[] sing;      // retained singular values
+    float64[] smooth;    // (nSeries, T) diagonal-averaged estimates
+    int64[] starts;
+    int64[] steps;
+    boolean fitted;
+
+    /** mSSA with the default window `⌊√T⌋` (§10.2). */
+    public Mssa(int64 rank) {
+        this.init((int64) 0, rank);
+        return;
+    }
+
+    /** mSSA with an explicit window `L`. */
+    public Mssa(int64 window, int64 rank) {
+        this.init(window, rank);
+        return;
+    }
+
+    void init(int64 window, int64 rank) {
+        if (rank < 1) {
+            throw heap RsException("Mssa: rank must be >= 1");
+        }
+        if (window < 0 || window == 1) {
+            throw heap RsException("Mssa: window must be 0 (default) or "
+                + ">= 2");
+        }
+        this.window = window;
+        this.rank = rank;
+        this.fitted = false;
+        return;
+    }
+
+    /** Fit a single series (§10.1–§10.4). */
+    public void fit(Series s) {
+        Series[] one = heap Series[1];
+        one[0] = s;
+        this.fitAll(one);
+        return;
+    }
+
+    /** Fit several related series jointly (§10.6) — shared rank. */
+    public void fitAll(Series[] ss) {
+        int64 nm = (int64) ss.count();
+        if (nm < 1) {
+            throw heap RsException("Mssa: at least one series");
+        }
+        int64 T = ss[0].count();
+        int64 m = 0;
+        while (m < nm) {
+            if (ss[m].count() != T) {
+                throw heap RsException("Mssa: all series must share a "
+                    + "length (series " + m + " has " + ss[m].count()
+                    + ", expected " + T + ")");
+            }
+            m = m + 1;
+        }
+        int64 L = this.window;
+        if (L == 0) {
+            L = (int64) Math.sqrt((float64) T);
+            if (L < 2) { L = 2; }
+        }
+        if (L > T) {
+            throw heap RsException("Mssa: window " + L + " exceeds the "
+                + "series length " + T);
+        }
+        int64 K = T - L + 1;
+        if (this.rank > L || this.rank > K * nm) {
+            throw heap RsException("Mssa: rank " + this.rank + " exceeds "
+                + "the trajectory matrix (" + L + "×" + (K * nm) + ")");
+        }
+        this.L = L;
+        this.K = K;
+        this.T = T;
+        this.nSeries = nm;
+
+        int64[] st = heap int64[nm];
+        int64[] sp = heap int64[nm];
+        float64[] big = heap float64[L * nm * K];
+        boolean[] present = heap boolean[L * nm * K];
+        boolean anyMissing = false;
+        int64 wide = nm * K;
+        m = 0;
+        while (m < nm) {
+            st[m] = ss[m].indexAt((int64) 0);
+            sp[m] = ss[m].indexStep();
+            if (ss[m].hasMissing()) {
+                anyMissing = true;
+                // The masked Hankel placement (ownership note above).
+                int64 i = 0;
+                while (i < L) {
+                    int64 j = 0;
+                    while (j < K) {
+                        int64 col = m * K + j;
+                        if (ss[m].isMissing(j + i)) {
+                            present[i * wide + col] = false;
+                        } else {
+                            big[i * wide + col] = ss[m].get(j + i);
+                            present[i * wide + col] = true;
+                        }
+                        j = j + 1;
+                    }
+                    i = i + 1;
+                }
+            } else {
+                // THE transform — dev.cajeta.timeseries owns it.
+                Tensor<float64> tm = ss[m].trajectoryMatrix(L);
+                int64 i = 0;
+                while (i < L) {
+                    int64 j = 0;
+                    while (j < K) {
+                        big[i * wide + m * K + j] = tm.flatGet(i * K + j);
+                        present[i * wide + m * K + j] = true;
+                        j = j + 1;
+                    }
+                    i = i + 1;
+                }
+            }
+            m = m + 1;
+        }
+        this.starts #= st;
+        this.steps #= sp;
+
+        if (anyMissing) {
+            // Init missing cells at the observed mean.
+            float64 mean = 0.0;
+            int64 cnt = 0;
+            int64 t = 0;
+            while (t < L * wide) {
+                if (present[t]) {
+                    mean = mean + big[t];
+                    cnt = cnt + 1;
+                }
+                t = t + 1;
+            }
+            if (cnt == 0) {
+                throw heap RsException("Mssa: every cell is missing");
+            }
+            mean = mean / (float64) cnt;
+            t = 0;
+            while (t < L * wide) {
+                if (!present[t]) { big[t] = mean; }
+                t = t + 1;
+            }
+            // Hard-impute EM: truncate, refill missing, repeat.
+            int64 it = 0;
+            while (it < 25) {
+                float64[] rec = this.truncate(big, L, wide);
+                t = 0;
+                while (t < L * wide) {
+                    if (!present[t]) { big[t] = rec[t]; }
+                    t = t + 1;
+                }
+                it = it + 1;
+            }
+        }
+        this.recon #= this.truncate(big, L, wide);
+
+        // Diagonal averaging back to series order (§10.4's "maps back").
+        float64[] sm = heap float64[nm * T];
+        m = 0;
+        while (m < nm) {
+            int64 p = 0;
+            while (p < T) {
+                float64 acc = 0.0;
+                int64 cnt = 0;
+                int64 i = 0;
+                while (i < L) {
+                    int64 j = p - i;
+                    if (j >= 0 && j < K) {
+                        acc = acc + this.recon[i * wide + m * K + j];
+                        cnt = cnt + 1;
+                    }
+                    i = i + 1;
+                }
+                sm[m * T + p] = acc / (float64) cnt;
+                p = p + 1;
+            }
+            m = m + 1;
+        }
+        this.smooth #= sm;
+        this.fitted = true;
+        return;
+    }
+
+    /** Rank-r truncation via `LinAlg.svd`; stashes the singular values. */
+    #float64[] truncate(float64[] a, int64 rows, int64 cols) {
+        float64[] cp = heap float64[rows * cols];
+        int64 t = 0;
+        while (t < rows * cols) { cp[t] = a[t]; t = t + 1; }
+        int64[] sh = heap int64[2]; sh[0] = rows; sh[1] = cols;
+        Tensor<float64>[] usv = LinAlg.svd<float64>(
+            Tensor.of<float64>(cp, sh));
+        Tensor<float64> u = usv[0];
+        Tensor<float64> s = usv[1];
+        Tensor<float64> vt = usv[2];
+        int64 r = s.shapeAt(0);
+        float64[] sg = heap float64[this.rank];
+        int64 k = 0;
+        while (k < this.rank) { sg[k] = s.flatGet(k); k = k + 1; }
+        this.sing #= sg;
+        float64[] out = heap float64[rows * cols];
+        int64 i = 0;
+        while (i < rows) {
+            int64 c = 0;
+            while (c < cols) {
+                float64 acc = 0.0;
+                k = 0;
+                while (k < this.rank) {
+                    acc = acc + u.flatGet(i * r + k) * s.flatGet(k)
+                        * vt.flatGet(k * cols + c);
+                    k = k + 1;
+                }
+                out[i * cols + c] = acc;
+                c = c + 1;
+            }
+            i = i + 1;
+        }
+        return #out;
+    }
+
+    /** The fitted window `L` (§10.2's default is `⌊√T⌋`). */
+    public int64 fittedWindow() {
+        this.check();
+        return this.L;
+    }
+
+    /** The retained singular values (§10.7 — rank bounds them). */
+    public #float64[] singularValues() {
+        this.check();
+        float64[] out = heap float64[this.rank];
+        int64 k = 0;
+        while (k < this.rank) { out[k] = this.sing[k]; k = k + 1; }
+        return #out;
+    }
+
+    /**
+     * The rank-`r` estimate of series `m` in series order — the
+     * denoised series, and at originally-missing positions the
+     * IMPUTATION (§10.3: the same operation).
+     */
+    public #Series estimate(int64 m) {
+        this.check();
+        this.checkSeries(m);
+        float64[] a = heap float64[this.T];
+        int64[] idx = heap int64[this.T];
+        int64 p = 0;
+        while (p < this.T) {
+            a[p] = this.smooth[m * this.T + p];
+            idx[p] = this.starts[m] + p * this.steps[m];
+            p = p + 1;
+        }
+        int64[] sh = heap int64[1]; sh[0] = this.T;
+        return Series.of(Tensor.of<float64>(a, sh), idx);
+    }
+
+    /**
+     * Forecast `h` steps of series `m` (§10.4): the SSA linear
+     * recurrence fitted on the completed matrix rolls forward; the
+     * result's index continues the series.
+     */
+    public #Series forecast(int64 m, int64 h) {
+        this.check();
+        this.checkSeries(m);
+        if (h < 1) {
+            throw heap RsException("Mssa: the horizon must be >= 1");
+        }
+        // w: last trajectory row regressed on the rows above it, across
+        // this series' columns.
+        int64 wide = this.nSeries * this.K;
+        int64 rows = this.K;
+        int64 cols = this.L - 1;
+        float64[] xf = heap float64[rows * cols];
+        float64[] yv = heap float64[rows];
+        int64 j = 0;
+        while (j < rows) {
+            int64 i = 0;
+            while (i < cols) {
+                xf[j * cols + i] = this.recon[i * wide + m * this.K + j];
+                i = i + 1;
+            }
+            yv[j] = this.recon[(this.L - 1) * wide + m * this.K + j];
+            j = j + 1;
+        }
+        int64[] xsh = heap int64[2]; xsh[0] = rows; xsh[1] = cols;
+        int64[] ysh = heap int64[1]; ysh[0] = rows;
+        Tensor<float64> beta = LinAlg.lstsq<float64>(
+            Tensor.of<float64>(xf, xsh), Tensor.of<float64>(yv, ysh));
+        // Roll forward on the smoothed series.
+        float64[] ext = heap float64[this.T + h];
+        int64 p = 0;
+        while (p < this.T) {
+            ext[p] = this.smooth[m * this.T + p];
+            p = p + 1;
+        }
+        int64 s2 = 0;
+        while (s2 < h) {
+            float64 acc = 0.0;
+            int64 i = 0;
+            while (i < cols) {
+                acc = acc + beta.flatGet(i) * ext[this.T + s2 - cols + i];
+                i = i + 1;
+            }
+            ext[this.T + s2] = acc;
+            s2 = s2 + 1;
+        }
+        float64[] out = heap float64[h];
+        int64[] idx = heap int64[h];
+        p = 0;
+        while (p < h) {
+            out[p] = ext[this.T + p];
+            idx[p] = this.starts[m] + (this.T + p) * this.steps[m];
+            p = p + 1;
+        }
+        int64[] sh = heap int64[1]; sh[0] = h;
+        return Series.of(Tensor.of<float64>(out, sh), idx);
+    }
+
+    void checkSeries(int64 m) {
+        if (m < 0 || m >= this.nSeries) {
+            throw heap RsException("Mssa: series index " + m
+                + " out of range [0, " + this.nSeries + ")");
+        }
+        return;
+    }
+
+    void check() {
+        if (!this.fitted) {
+            throw heap RsException("Mssa: not fitted yet");
+        }
+        return;
+    }
+}
