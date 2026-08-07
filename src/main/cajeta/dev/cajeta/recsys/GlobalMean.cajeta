@@ -1,0 +1,23 @@
+package dev.cajeta.recsys;
+
+/** §3.1: every prediction is the mean of the OBSERVED ratings. */
+public final class GlobalMean implements RatingPredictor {
+
+    float64 mu;
+    boolean fitted;
+
+    GlobalMean() { this.fitted = false; return; }
+
+    public void fit(Interactions m) {
+        this.mu = Baselines.observedMean(m);
+        this.fitted = true;
+        return;
+    }
+
+    public float64 predict(int64 u, int64 i) {
+        if (!this.fitted) {
+            throw heap RsException("GlobalMean: predict before fit");
+        }
+        return this.mu;
+    }
+}

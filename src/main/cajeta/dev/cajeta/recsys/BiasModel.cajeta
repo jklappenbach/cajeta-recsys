@@ -1,0 +1,120 @@
+package dev.cajeta.recsys;
+
+/**
+ * §3.3: the bias baseline `μ + b_u + b_i`, biases estimated by
+ * regularized alternating least squares — Surprise `BaselineOnly`'s
+ * exact procedure (items pass first, then users, from zero starts):
+ *
+ *   b_i ← Σ_{u∈R(i)} (r_ui − μ − b_u) / (reg_i + |R(i)|)
+ *   b_u ← Σ_{i∈R(u)} (r_ui − μ − b_i) / (reg_u + |R(u)|)
+ *
+ * Predictions clip to the DATA's rating scale (§5.7 — the scale is a
+ * property of the dataset, not a hardcoded 1–5). Fallback chain:
+ * unknown user or item drops that bias term; both unknown → μ.
+ */
+public final class BiasModel implements RatingPredictor {
+
+    int64 epochs;
+    float64 regI;
+    float64 regU;
+
+    float64 mu;
+    float64[] bu;
+    float64[] bi;
+    float64 lo;
+    float64 hi;
+    boolean fitted;
+
+    BiasModel(int64 epochs, float64 regI, float64 regU) {
+        if (epochs < 1) {
+            throw heap RsException("BiasModel: epochs must be >= 1");
+        }
+        this.epochs = epochs;
+        this.regI = regI;
+        this.regU = regU;
+        this.fitted = false;
+        return;
+    }
+
+    public void fit(Interactions m) {
+        this.mu = Baselines.observedMean(m);
+        this.lo = m.minRating();
+        this.hi = m.maxRating();
+        int64 nU = m.userCount();
+        int64 nI = m.itemCount();
+        float64[] bu = heap float64[nU];
+        float64[] bi = heap float64[nI];
+        int64 e = 0;
+        while (e < this.epochs) {
+            int64 i = 0;
+            while (i < nI) {
+                float64 dev = 0.0;
+                int64 k = 0;
+                while (k < m.itemNnz(i)) {
+                    dev = dev + (m.itemRatingAt(i, k) - this.mu
+                                 - bu[m.itemUserAt(i, k)]);
+                    k = k + 1;
+                }
+                bi[i] = dev / (this.regI + (float64) m.itemNnz(i));
+                i = i + 1;
+            }
+            int64 u = 0;
+            while (u < nU) {
+                float64 dev = 0.0;
+                int64 k = 0;
+                while (k < m.userNnz(u)) {
+                    dev = dev + (m.userRatingAt(u, k) - this.mu
+                                 - bi[m.userItemAt(u, k)]);
+                    k = k + 1;
+                }
+                bu[u] = dev / (this.regU + (float64) m.userNnz(u));
+                u = u + 1;
+            }
+            e = e + 1;
+        }
+        this.bu #= bu;
+        this.bi #= bi;
+        this.fitted = true;
+        return;
+    }
+
+    public float64 predict(int64 u, int64 i) {
+        if (!this.fitted) {
+            throw heap RsException("BiasModel: predict before fit");
+        }
+        float64 est = this.mu;
+        if (u >= 0 && u < (int64) this.bu.count()) {
+            est = est + this.bu[u];
+        }
+        if (i >= 0 && i < (int64) this.bi.count()) {
+            est = est + this.bi[i];
+        }
+        if (est < this.lo) { est = this.lo; }
+        if (est > this.hi) { est = this.hi; }
+        return est;
+    }
+
+    /** The fitted user bias (inspectable). */
+    public float64 userBias(int64 u) {
+        if (!this.fitted) {
+            throw heap RsException("BiasModel: not fitted yet");
+        }
+        return this.bu[u];
+    }
+
+    /** The fitted item bias (inspectable). */
+    public float64 itemBias(int64 i) {
+        if (!this.fitted) {
+            throw heap RsException("BiasModel: not fitted yet");
+        }
+        return this.bi[i];
+    }
+
+    /** The global mean μ. */
+    public float64 globalMean() {
+        if (!this.fitted) {
+            throw heap RsException("BiasModel: not fitted yet");
+        }
+        return this.mu;
+    }
+}

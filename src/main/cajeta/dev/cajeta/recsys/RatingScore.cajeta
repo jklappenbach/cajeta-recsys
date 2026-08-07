@@ -1,0 +1,50 @@
+package dev.cajeta.recsys;
+
+import cajeta.math.Tensor;
+import dev.cajeta.ml.Metrics;
+
+/**
+ * The shared evaluation entry point (plan 2.2.3): score any
+ * {@link RatingPredictor} on held-out (user, item, rating) triples —
+ * RMSE and MAE through `dev.cajeta.ml.Metrics`, never redefined. Every
+ * unit after U2 reports against the §3 baselines through THIS, so
+ * §12.2's "beats the baseline or is reported as such" is enforceable
+ * from the first model onward.
+ */
+public final class RatingScore {
+
+    /** RMSE of `p` over the held-out triples. */
+    public static float64 rmse(RatingPredictor p, int64[] us, int64[] is,
+                               float64[] rs) {
+        Tensor<float64> a = RatingScore.actual(rs);
+        Tensor<float64> q = RatingScore.predicted(p, us, is);
+        return Metrics.rmse(a, q);
+    }
+
+    /** MAE of `p` over the held-out triples. */
+    public static float64 mae(RatingPredictor p, int64[] us, int64[] is,
+                              float64[] rs) {
+        Tensor<float64> a = RatingScore.actual(rs);
+        Tensor<float64> q = RatingScore.predicted(p, us, is);
+        return Metrics.mae(a, q);
+    }
+
+    static #Tensor<float64> actual(float64[] rs) {
+        int64 n = (int64) rs.count();
+        float64[] a = heap float64[n];
+        int64 t = 0;
+        while (t < n) { a[t] = rs[t]; t = t + 1; }
+        int64[] sh = heap int64[1]; sh[0] = n;
+        return Tensor.of<float64>(a, sh);
+    }
+
+    static #Tensor<float64> predicted(RatingPredictor p, int64[] us,
+                                      int64[] is) {
+        int64 n = (int64) us.count();
+        float64[] q = heap float64[n];
+        int64 t = 0;
+        while (t < n) { q[t] = p.predict(us[t], is[t]); t = t + 1; }
+        int64[] sh = heap int64[1]; sh[0] = n;
+        return Tensor.of<float64>(q, sh);
+    }
+}

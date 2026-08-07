@@ -1,0 +1,43 @@
+package dev.cajeta.recsys;
+
+/**
+ * §3.2: the item's observed mean. Fallback chain, documented: unknown
+ * item (`−1`) → global mean. (An item index that exists always has at
+ * least one rating — {@link Interactions} only knows items that appear
+ * in a triple.)
+ */
+public final class ItemMean implements RatingPredictor {
+
+    float64 mu;
+    float64[] means;
+    boolean fitted;
+
+    ItemMean() { this.fitted = false; return; }
+
+    public void fit(Interactions m) {
+        this.mu = Baselines.observedMean(m);
+        float64[] mm = heap float64[m.itemCount()];
+        int64 i = 0;
+        while (i < m.itemCount()) {
+            float64 acc = 0.0;
+            int64 k = 0;
+            while (k < m.itemNnz(i)) {
+                acc = acc + m.itemRatingAt(i, k);
+                k = k + 1;
+            }
+            mm[i] = acc / (float64) m.itemNnz(i);
+            i = i + 1;
+        }
+        this.means #= mm;
+        this.fitted = true;
+        return;
+    }
+
+    public float64 predict(int64 u, int64 i) {
+        if (!this.fitted) {
+            throw heap RsException("ItemMean: predict before fit");
+        }
+        if (i < 0 || i >= (int64) this.means.count()) { return this.mu; }
+        return this.means[i];
+    }
+}

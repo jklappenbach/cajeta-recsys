@@ -1,0 +1,41 @@
+package dev.cajeta.recsys;
+
+/**
+ * §3.2: the user's observed mean. Fallback chain, documented: unknown
+ * user (`−1`) → global mean.
+ */
+public final class UserMean implements RatingPredictor {
+
+    float64 mu;
+    float64[] means;
+    boolean fitted;
+
+    UserMean() { this.fitted = false; return; }
+
+    public void fit(Interactions m) {
+        this.mu = Baselines.observedMean(m);
+        float64[] mm = heap float64[m.userCount()];
+        int64 u = 0;
+        while (u < m.userCount()) {
+            float64 acc = 0.0;
+            int64 k = 0;
+            while (k < m.userNnz(u)) {
+                acc = acc + m.userRatingAt(u, k);
+                k = k + 1;
+            }
+            mm[u] = acc / (float64) m.userNnz(u);
+            u = u + 1;
+        }
+        this.means #= mm;
+        this.fitted = true;
+        return;
+    }
+
+    public float64 predict(int64 u, int64 i) {
+        if (!this.fitted) {
+            throw heap RsException("UserMean: predict before fit");
+        }
+        if (u < 0 || u >= (int64) this.means.count()) { return this.mu; }
+        return this.means[u];
+    }
+}

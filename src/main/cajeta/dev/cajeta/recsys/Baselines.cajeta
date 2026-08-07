@@ -1,0 +1,53 @@
+package dev.cajeta.recsys;
+
+/**
+ * The averaging baselines (spec §3) — the bar every real model must
+ * clear (§12.2), so they exist BEFORE any model does.
+ *
+ * All means are over OBSERVED ratings only — never over a zero-filled
+ * matrix (§12.1). Fallback chains are documented per class and end at
+ * the global mean; `predict(−1, …)` (unknown user/item) takes the same
+ * chain (§2.6).
+ */
+public final class Baselines {
+
+    /** Every prediction is the mean of all observed ratings (§3.1). */
+    public static #GlobalMean globalMean() { return heap GlobalMean(); }
+
+    /** The item's observed mean; empty/unknown item → global mean (§3.2). */
+    public static #ItemMean itemMean() { return heap ItemMean(); }
+
+    /** The user's observed mean; empty/unknown user → global mean (§3.2). */
+    public static #UserMean userMean() { return heap UserMean(); }
+
+    /**
+     * The bias model `μ + b_u + b_i` (§3.3), biases by regularized
+     * alternating least squares with Surprise `BaselineOnly`'s defaults
+     * (10 epochs, `reg_i` 10, `reg_u` 15). Unknown user or item drops
+     * that bias term; both unknown → μ.
+     */
+    public static #BiasModel bias() {
+        return heap BiasModel((int64) 10, 10.0, 15.0);
+    }
+
+    /** The bias model with explicit epochs and regularization. */
+    public static #BiasModel bias(int64 epochs, float64 regItem,
+                                  float64 regUser) {
+        return heap BiasModel(epochs, regItem, regUser);
+    }
+
+    /** Mean of the observed ratings of `m` (never zero-filled). */
+    static float64 observedMean(Interactions m) {
+        float64 acc = 0.0;
+        int64 u = 0;
+        while (u < m.userCount()) {
+            int64 k = 0;
+            while (k < m.userNnz(u)) {
+                acc = acc + m.userRatingAt(u, k);
+                k = k + 1;
+            }
+            u = u + 1;
+        }
+        return acc / (float64) m.count();
+    }
+}

@@ -1,0 +1,196 @@
+package dev.cajeta.recsys.selftest;
+
+import dev.cajeta.unit.Assert;
+import cajeta.math.Tensor;
+import dev.cajeta.recsys.Baselines;
+import dev.cajeta.recsys.BiasModel;
+import dev.cajeta.recsys.GlobalMean;
+import dev.cajeta.recsys.Interactions;
+import dev.cajeta.recsys.ItemMean;
+import dev.cajeta.recsys.RatingScore;
+import dev.cajeta.recsys.UserMean;
+
+/**
+ * ml-recsys U2 — baselines: the observed-only global mean (2.1.1),
+ * hand-computed item/user means (2.1.2), Surprise `BaselineOnly` ALS
+ * parity for the bias model (2.1.3), the documented fallback chain
+ * (2.1.4), and the shared scoring entry every later unit reports
+ * through (2.1.5).
+ */
+public class BaselinesTest {
+
+    public BaselinesTest() { return; }
+
+    /** The pinned 200-rating fixture as an Interactions matrix. */
+    static #Interactions ratings() {
+        Tensor<float64> tu = Fx.load("rs_ratings_u");
+        Tensor<float64> ti = Fx.load("rs_ratings_i");
+        Tensor<float64> tr = Fx.load("rs_ratings_r");
+        int64 n = tu.shapeAt(0);
+        String[] us = heap String[n];
+        String[] is = heap String[n];
+        float64[] rs = heap float64[n];
+        int64 t = 0;
+        while (t < n) {
+            us[t] = "" + (int64) tu.flatGet(t);
+            is[t] = "" + (int64) ti.flatGet(t);
+            rs[t] = tr.flatGet(t);
+            t = t + 1;
+        }
+        return Interactions.of(us, is, rs);
+    }
+
+    // 2.1.1 — the global mean is the mean of OBSERVED ratings (matching
+    // Surprise's trainset.global_mean), and demonstrably NOT the mean of
+    // any zero-filled view.
+    @Test
+    public void globalMeanIsObservedOnly() {
+        Interactions m = BaselinesTest.ratings();
+        GlobalMean g = Baselines.globalMean();
+        g.fit(m);
+        float64 want = Fx.load("rs_baseline_mu").flatGet((int64) 0);
+        Assert.isTrue(Fx.close(g.predict((int64) 0, (int64) 0), want,
+            0.0000000001));
+        // The zero-filled mean is a different (wrong) number.
+        float64 zeroFilled = want * m.density();
+        Assert.isTrue(!Fx.close(g.predict((int64) 0, (int64) 0), zeroFilled,
+            0.1));
+        return;
+    }
+
+    // 2.1.2 — item and user means, hand-computed on the tiny fixture
+    //          x       y      z
+    //   A     1.0     3.0     —
+    //   B      —      5.0    2.0
+    @Test
+    public void itemAndUserMeansHandComputed() {
+        String[] us = heap String[4];
+        String[] is = heap String[4];
+        float64[] rs = heap float64[4];
+        us[0] = "A"; is[0] = "x"; rs[0] = 1.0;
+        us[1] = "A"; is[1] = "y"; rs[1] = 3.0;
+        us[2] = "B"; is[2] = "y"; rs[2] = 5.0;
+        us[3] = "B"; is[3] = "z"; rs[3] = 2.0;
+        Interactions m = Interactions.of(us, is, rs);
+
+        ItemMean im = Baselines.itemMean();
+        im.fit(m);
+        Assert.isTrue(im.predict((int64) 0, (int64) 0) == 1.0);   // x: {1}
+        Assert.isTrue(im.predict((int64) 0, (int64) 1) == 4.0);   // y: {3,5}
+        Assert.isTrue(im.predict((int64) 1, (int64) 2) == 2.0);   // z: {2}
+
+        UserMean um = Baselines.userMean();
+        um.fit(m);
+        Assert.isTrue(um.predict((int64) 0, (int64) 2) == 2.0);   // A: {1,3}
+        Assert.isTrue(um.predict((int64) 1, (int64) 0) == 3.5);   // B: {5,2}
+        return;
+    }
+
+    // 2.1.3 — the bias model matches Surprise BaselineOnly (ALS,
+    // 10 epochs, reg_i 10, reg_u 15) bias for bias. The fixture arrays
+    // are in RAW id order; the matrix indexes by first appearance — the
+    // comparison goes through the id map, which is itself part of the
+    // claim (2.4).
+    @Test
+    public void biasModelMatchesSurprise() {
+        Interactions m = BaselinesTest.ratings();
+        BiasModel b = Baselines.bias();
+        b.fit(m);
+        float64 mu = Fx.load("rs_baseline_mu").flatGet((int64) 0);
+        Assert.isTrue(Fx.close(b.globalMean(), mu, 0.0000000001));
+        Tensor<float64> wbu = Fx.load("rs_baseline_bu");
+        Tensor<float64> wbi = Fx.load("rs_baseline_bi");
+        int64 u = 0;
+        while (u < m.userCount()) {
+            int64 ix = m.userIndex("" + u);
+            Assert.isTrue(ix >= 0);
+            Assert.isTrue(Fx.close(b.userBias(ix), wbu.flatGet(u), 0.000000001));
+            u = u + 1;
+        }
+        int64 i = 0;
+        while (i < m.itemCount()) {
+            int64 ix = m.itemIndex("" + i);
+            Assert.isTrue(ix >= 0);
+            Assert.isTrue(Fx.close(b.itemBias(ix), wbi.flatGet(i), 0.000000001));
+            i = i + 1;
+        }
+        // The prediction is μ + b_u + b_i, clipped to the DATA scale —
+        // raw user 3, raw item 5, both mapped.
+        float64 est = b.predict(m.userIndex("3"), m.itemIndex("5"));
+        Assert.isTrue(Fx.close(est,
+            BaselinesTest.clip(mu + wbu.flatGet((int64) 3)
+                + wbi.flatGet((int64) 5), m.minRating(), m.maxRating()),
+            0.000000001));
+        return;
+    }
+
+    static float64 clip(float64 v, float64 lo, float64 hi) {
+        if (v < lo) { return lo; }
+        if (v > hi) { return hi; }
+        return v;
+    }
+
+    // 2.1.4 + §2.6 — the documented fallback chain: unknown (−1) user or
+    // item falls to the global mean (or drops the bias term), never a
+    // crash, never an arbitrary constant.
+    @Test
+    public void fallbackChainIsDocumented() {
+        Interactions m = BaselinesTest.ratings();
+        float64 mu = Fx.load("rs_baseline_mu").flatGet((int64) 0);
+
+        ItemMean im = Baselines.itemMean();
+        im.fit(m);
+        Assert.isTrue(Fx.close(im.predict((int64) 0, (int64) -1), mu,
+            0.0000000001));
+
+        UserMean um = Baselines.userMean();
+        um.fit(m);
+        Assert.isTrue(Fx.close(um.predict((int64) -1, (int64) 0), mu,
+            0.0000000001));
+
+        BiasModel b = Baselines.bias();
+        b.fit(m);
+        // Both unknown → μ (clipped identity: μ is inside the scale).
+        Assert.isTrue(Fx.close(b.predict((int64) -1, (int64) -1), mu,
+            0.0000000001));
+        // Unknown item keeps the user bias.
+        Assert.isTrue(Fx.close(b.predict((int64) 2, (int64) -1),
+            BaselinesTest.clip(mu + b.userBias((int64) 2), m.minRating(),
+                m.maxRating()), 0.000000001));
+        return;
+    }
+
+    // 2.1.5 — the shared scoring entry: the bias model beats the global
+    // mean in-sample on the planted-structure fixture, through the SAME
+    // entry point every later unit must use.
+    @Test
+    public void sharedScoringEntryRanksBaselines() {
+        Interactions m = BaselinesTest.ratings();
+        Tensor<float64> tu = Fx.load("rs_ratings_u");
+        Tensor<float64> ti = Fx.load("rs_ratings_i");
+        Tensor<float64> tr = Fx.load("rs_ratings_r");
+        int64 n = tu.shapeAt(0);
+        int64[] us = heap int64[n];
+        int64[] is = heap int64[n];
+        float64[] rs = heap float64[n];
+        int64 t = 0;
+        while (t < n) {
+            // Fixture ids are the same strings the matrix indexed, so
+            // the round trip through the id map is part of the test.
+            us[t] = m.userIndex("" + (int64) tu.flatGet(t));
+            is[t] = m.itemIndex("" + (int64) ti.flatGet(t));
+            rs[t] = tr.flatGet(t);
+            t = t + 1;
+        }
+        GlobalMean g = Baselines.globalMean();
+        g.fit(m);
+        BiasModel b = Baselines.bias();
+        b.fit(m);
+        float64 rg = RatingScore.rmse(g, us, is, rs);
+        float64 rb = RatingScore.rmse(b, us, is, rs);
+        System.stdout.println("baseline rmse: global=" + rg + " bias=" + rb);
+        Assert.isTrue(rb < rg);
+        Assert.isTrue(RatingScore.mae(b, us, is, rs) > 0.0);
+        return;
+    }
+}

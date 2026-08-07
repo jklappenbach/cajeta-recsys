@@ -1,0 +1,22 @@
+package dev.cajeta.recsys;
+
+/**
+ * The rating-prediction contract (spec §3, §11.4): fit on an
+ * {@link Interactions} matrix, then predict the rating user `u` would
+ * give item `i`. This is deliberately NOT `dev.cajeta.ml.Predictor` —
+ * a recommender predicts for (user, item) PAIRS, not feature rows.
+ *
+ * **Cold start is part of the contract** (§2.6): `predict` accepts `−1`
+ * for an unknown user or item (what {@link Interactions#userIndex}
+ * answers for an unseen id) and every implementation falls back through
+ * its documented chain to the global mean — no exception surprise, no
+ * fabricated score.
+ */
+public interface RatingPredictor {
+
+    /** Fit on the interaction matrix. */
+    void fit(Interactions m);
+
+    /** Predicted rating for (u, i); `−1` means unknown user/item. */
+    float64 predict(int64 u, int64 i);
+}
