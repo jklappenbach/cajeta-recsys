@@ -140,17 +140,13 @@ public class ContentBasedTest {
         Assert.isTrue(sawCold);
         return;
     }
-
-    /** Interactions whose item indexes EQUAL the raw ids (0..5). */
-    static #Interactions aligned(Interactions m) {
-        // Rebuild with items 0..5 registered in order so matrix item
-        // index == profile index. Register a priming user rating every
-        // item once at the global mean-ish 3.0? That would pollute
-        // has() — instead build from the ORIGINAL triples padded with
-        // one priming row per item under a sentinel user, then the
-        // sentinel never queries. Simplest honest alignment for the
-        // test: construct the matrix so first appearances run 0..5.
-        return #m;
+    /**
+     * A VIEW of `m`, whose item indexes already equal the raw ids: the
+     * alignment is done by `matrix`, which primes 0..5 under a sentinel
+     * user, so this only names the requirement at the call site.
+     */
+    static Interactions aligned(Interactions m) {
+        return m;
     }
 
     static #Interactions matrix(String[] us, String[] is, float64[] rs) {
