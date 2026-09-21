@@ -21,7 +21,7 @@
 
     "details": {
         "name":               "dev.cajeta.recsys",
-        "version":            "0.1.0",
+        "version":            "0.1.1",
         "description":        "cajeta-recsys — recommenders: interaction matrix (missing != zero), baselines, neighbourhood + factorization CF, co-clustering, ranking metrics, mSSA",
         "license":            "Apache-2.0",
         "authors":            ["Julian Klappenbach"],
@@ -33,16 +33,30 @@
 
         // dev.cajeta.ml: Metrics + KMeans + the protocol where it fits.
         // dev.cajeta.timeseries: the trajectory (Hankel) transform mSSA
-        // consumes (roadmap §5.3). dev.cajeta.docs joins when the
-        // content-based unit unblocks (cajeta-docs U6–U7 unstarted).
+        // consumes (roadmap §5.3). dev.cajeta.docs: the TF-IDF vectorizer
+        // ContentBased builds item profiles from (§7.1).
+        //
+        // All three raises are REQUIRED floors under cajeta v0.29.0, not
+        // courtesy bumps. A consumer's compiler re-checks a dependency
+        // archive's OWN sources, and each old peg is rejected there, naming
+        // a symbol this library does not contain: ml 0.10.0 keeps a plain
+        // Tensor parameter `x` in a field, which the captured-borrow check
+        // refuses, and docs 0.1.0 reads `JsonValue.asObject`, which the
+        // v0.29.0 stdlib no longer has. timeseries 0.1.1 carries the ml
+        // 0.10.0 peg transitively, so it moves with it. Measured one peg at
+        // a time so each error is attributed to the peg that carries it.
         "dependencies": {
-            "dev.cajeta.ml": "0.10.0",
-            "dev.cajeta.timeseries": "0.1.1",
-            "dev.cajeta.docs": "0.1.0"
+            "dev.cajeta.ml": "0.10.2",
+            "dev.cajeta.timeseries": "0.1.2",
+            "dev.cajeta.docs": "0.1.1"
         },
 
+        // 0.3.0 is a REQUIRED floor for the same reason: 0.2.0 carries a
+        // PredMatcher keeping a plain function parameter `pred` in a field,
+        // so the test binary refuses to link naming `pred`. 0.3.0 takes the
+        // predicate owned.
         "dev-dependencies": {
-            "dev.cajeta.unit": "0.2.0"
+            "dev.cajeta.unit": "0.3.0"
         },
 
         "repositories": [

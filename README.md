@@ -23,7 +23,7 @@ and densification demands an explicit fill because "defaults to zero" is
 - **Co-clustering** — Surprise's `CoClustering`, with the documented
   empty-cluster fallback chain.
 - **Content-based** — item/user profiles over `dev.cajeta.docs` TF-IDF
-  vectors *(blocked until cajeta-docs ships its text pipeline)*.
+  vectors.
 - **mSSA** — matrix estimation over time series: the trajectory
   transform comes from `dev.cajeta.timeseries`, completion from the §5
   estimators; no stationarity assumed.
@@ -53,6 +53,8 @@ Departures live in [docs/DifferencesFromOracles.md](docs/DifferencesFromOracles.
 cajeta build      # emit build/archive/dev.cajeta.recsys-<version>.cja
 ```
 
-Depends on `dev.cajeta.ml` 0.9.0 (`Metrics`, `KMeans`, the protocol
-where it genuinely fits) and `dev.cajeta.timeseries` 0.1.0 (the
-trajectory transform).
+Depends on `dev.cajeta.ml` 0.10.2 (`Metrics`, `KMeans`, the protocol
+where it genuinely fits), `dev.cajeta.timeseries` 0.1.2 (the trajectory
+transform) and `dev.cajeta.docs` 0.1.1 (the TF-IDF vectorizer the
+content-based profiles are built from). Built and gated on cajeta
+v0.29.0.
