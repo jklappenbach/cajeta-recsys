@@ -49,8 +49,8 @@ public final class ZeroFilledSvd implements RatingPredictor {
                 + " exceeds the matrix (" + this.nU + "×" + this.nI + ")");
         }
         // THE zero-fill — explicit, and the documented assumption.
-        Tensor<float64> dense = m.toDense(0.0);
-        Tensor<float64>[] usv = LinAlg.svd<float64>(dense);
+        Tensor<float64> dense #= m.toDense(0.0);
+        Tensor<float64>[] usv #= LinAlg.svd<float64>(dense);
         Tensor<float64> u = usv[0];
         Tensor<float64> s = usv[1];
         Tensor<float64> vt = usv[2];
@@ -77,7 +77,7 @@ public final class ZeroFilledSvd implements RatingPredictor {
             r = r + 1;
         }
         int64[] sh = heap int64[2]; sh[0] = this.nU; sh[1] = this.nI;
-        Tensor<float64> rt = Tensor.of<float64>(rc, sh);
+        Tensor<float64> rt #= Tensor.of<float64>(rc, sh);
         this.recon #= rt;
         this.fitted = true;
         return;

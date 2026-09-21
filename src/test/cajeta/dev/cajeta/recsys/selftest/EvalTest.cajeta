@@ -62,7 +62,7 @@ public class EvalTest {
         float64[] scores = heap float64[5];
         scores[0] = 5.0; scores[1] = 4.0; scores[2] = 3.0;
         scores[3] = 2.0; scores[4] = 1.0;
-        TopNList rec = EvalTest.list(items, scores);
+        TopNList rec #= EvalTest.list(items, scores);
 
         int64[] ti = heap int64[3];
         ti[0] = 1; ti[1] = 2; ti[2] = 5;
@@ -102,7 +102,7 @@ public class EvalTest {
     static #TopNList list(int64[] items, float64[] scores) {
         // Build through the public surface: a predictor that scores
         // exactly these items this way on the tiny catalog.
-        Interactions m = EvalTest.tinyCatalog();
+        Interactions m #= EvalTest.tinyCatalog();
         FixedScores p = heap FixedScores(#items, #scores);
         return TopN.recommend(p, m, (int64) 0, (int64) 5, true);
     }
@@ -111,17 +111,17 @@ public class EvalTest {
     // including them is the explicit opt-in.
     @Test
     public void seenItemsExcludedByDefault() {
-        Interactions m = KnnTest.load("rs_knn_train");
-        ItemMean im = Baselines.itemMean();
+        Interactions m #= KnnTest.load("rs_knn_train");
+        ItemMean im #= Baselines.itemMean();
         im.fit(m);
         int64 u = 0;
-        TopNList rec = TopN.recommend(im, m, u, (int64) 5);
+        TopNList rec #= TopN.recommend(im, m, u, (int64) 5);
         int64 r = 0;
         while (r < rec.count()) {
             Assert.isTrue(!m.has(u, rec.itemAt(r)));
             r = r + 1;
         }
-        TopNList all = TopN.recommend(im, m, u, m.itemCount(), true);
+        TopNList all #= TopN.recommend(im, m, u, m.itemCount(), true);
         // With the opt-in, the user's own items reappear.
         boolean foundSeen = false;
         r = 0;
@@ -137,24 +137,24 @@ public class EvalTest {
     // item-mean bar; GlobalMean fails it and is SAID to fail it.
     @Test
     public void harnessReportsAgainstTheBar() {
-        Interactions m = KnnTest.load("rs_knn_train");
-        Tensor<float64> tr = Fx.load("rs_knn_test_r");
+        Interactions m #= KnnTest.load("rs_knn_train");
+        Tensor<float64> tr #= Fx.load("rs_knn_test_r");
         int64 n = tr.shapeAt(0);
-        int64[] us = KnnTest.mapUsers(m, "rs_knn_test");
-        int64[] is = KnnTest.mapItems(m, "rs_knn_test");
+        int64[] us #= KnnTest.mapUsers(m, "rs_knn_test");
+        int64[] is #= KnnTest.mapItems(m, "rs_knn_test");
         float64[] rs = heap float64[n];
         int64 t = 0;
         while (t < n) { rs[t] = tr.flatGet(t); t = t + 1; }
 
         RatingPredictor[] algos = heap RatingPredictor[3];
-        algos[0] = Baselines.globalMean();
-        algos[1] = Baselines.bias();
-        algos[2] = KnnCf.userBased("msd", (int64) 40, (int64) 1);
+        algos[0] #= Baselines.globalMean();
+        algos[1] #= Baselines.bias();
+        algos[2] #= KnnCf.userBased("msd", (int64) 40, (int64) 1);
         String[] names = heap String[3];
         names[0] = "global-mean";
         names[1] = "bias";
         names[2] = "knn-user-msd";
-        Harness h = Harness.compare(algos, names, m, us, is, rs);
+        Harness h #= Harness.compare(algos, names, m, us, is, rs);
         // On this fixture the structure is mostly ITEM biases, so
         // item-mean is a strong bar (0.448): global-mean AND the bias
         // model genuinely fail it — and the harness SAYS so, which is
@@ -171,9 +171,9 @@ public class EvalTest {
     // the LATEST interactions and offers no shuffle.
     @Test
     public void splitsAreHonest() {
-        Tensor<float64> tu = Fx.load("rs_ratings_u");
-        Tensor<float64> ti = Fx.load("rs_ratings_i");
-        Tensor<float64> trr = Fx.load("rs_ratings_r");
+        Tensor<float64> tu #= Fx.load("rs_ratings_u");
+        Tensor<float64> ti #= Fx.load("rs_ratings_i");
+        Tensor<float64> trr #= Fx.load("rs_ratings_r");
         int64 n = tu.shapeAt(0);
         int64[] us = heap int64[n];
         int64[] is = heap int64[n];
@@ -187,8 +187,8 @@ public class EvalTest {
             times[t] = (int64) ((t * 37) % n);          // scrambled clock
             t = t + 1;
         }
-        RsSplit s1 = RsSplit.interactions(us, is, rs, 0.1, (uint64) 9);
-        RsSplit s2 = RsSplit.interactions(us, is, rs, 0.1, (uint64) 9);
+        RsSplit s1 #= RsSplit.interactions(us, is, rs, 0.1, (uint64) 9);
+        RsSplit s2 #= RsSplit.interactions(us, is, rs, 0.1, (uint64) 9);
         Assert.equals((int64) s1.testU.count(), (int64) s2.testU.count());
         t = 0;
         while (t < (int64) s1.testU.count()) {
@@ -212,7 +212,7 @@ public class EvalTest {
             t = t + 1;
         }
         // Chronological: every train time precedes every test time.
-        RsSplit ct = RsSplit.byTime(us, is, rs, times, 0.2);
+        RsSplit ct #= RsSplit.byTime(us, is, rs, times, 0.2);
         int64 maxTrain = -1;
         t = 0;
         while (t < (int64) ct.trainU.count()) {
@@ -244,15 +244,15 @@ public class EvalTest {
     // §9.6 — coverage: a constant recommender covers exactly k items.
     @Test
     public void coverageCountsTheCatalog() {
-        Interactions m = KnnTest.load("rs_knn_train");
-        GlobalMean g = Baselines.globalMean();
+        Interactions m #= KnnTest.load("rs_knn_train");
+        GlobalMean g #= Baselines.globalMean();
         g.fit(m);
         // GlobalMean ties everywhere → the same k items for every user.
         int64 nU = m.userCount();
         TopNList[] lists = heap TopNList[nU];
         int64 u = 0;
         while (u < nU) {
-            lists[u] = TopN.recommend(g, m, u, (int64) 3, true);
+            lists[u] #= TopN.recommend(g, m, u, (int64) 3, true);
             u = u + 1;
         }
         float64 cov = RankMetrics.coverage(lists, m.itemCount());

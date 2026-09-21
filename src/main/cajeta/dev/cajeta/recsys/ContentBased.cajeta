@@ -43,7 +43,7 @@ public final class ContentBased {
         }
         Vectorizer v = heap Vectorizer();
         v.fit(itemTexts);
-        CsrMatrix m = v.transform(itemTexts);
+        CsrMatrix m #= v.transform(itemTexts);
         this.profiles #= m.toDense();
         this.vec #= v;
         this.nItems = n;
@@ -111,7 +111,7 @@ public final class ContentBased {
     public #TopNList recommendFor(Interactions m, int64 u, int64 n,
                                   boolean includeSeen) {
         this.check();
-        Tensor<float64> up = this.userProfile(m, u);
+        Tensor<float64> up #= this.userProfile(m, u);
         float64[] score = heap float64[this.nItems];
         int64 i = 0;
         while (i < this.nItems) {

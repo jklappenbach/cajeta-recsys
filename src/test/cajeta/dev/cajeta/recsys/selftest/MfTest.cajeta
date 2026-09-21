@@ -28,11 +28,11 @@ public class MfTest {
     // TruncatedSVD (arpack) reconstruction and singular values.
     @Test
     public void zeroFilledSvdMatchesSklearn() {
-        Interactions m = BaselinesTest.ratings();
+        Interactions m #= BaselinesTest.ratings();
         ZeroFilledSvd z = heap ZeroFilledSvd((int64) 5);
         z.fit(m);
-        Tensor<float64> want = Fx.load("rs_tsvd_recon");
-        Tensor<float64> got = z.reconstruction();
+        Tensor<float64> want #= Fx.load("rs_tsvd_recon");
+        Tensor<float64> got #= z.reconstruction();
         // Map: fixture rows/cols are raw ids; ours are first-appearance.
         int64 nU = m.userCount();
         int64 nI = m.itemCount();
@@ -48,8 +48,8 @@ public class MfTest {
             }
             u = u + 1;
         }
-        Tensor<float64> ws = Fx.load("rs_tsvd_singular");
-        float64[] sg = z.singularValues();
+        Tensor<float64> ws #= Fx.load("rs_tsvd_singular");
+        float64[] sg #= z.singularValues();
         int64 k = 0;
         while (k < 5) {
             Assert.isTrue(Fx.close(sg[k], ws.flatGet(k), 0.00000001));
@@ -64,7 +64,7 @@ public class MfTest {
     // it — and touches only the sparse accessors.)
     @Test
     public void theTwoSvdsDiffer() {
-        Interactions m = BaselinesTest.ratings();
+        Interactions m #= BaselinesTest.ratings();
         ZeroFilledSvd z = heap ZeroFilledSvd((int64) 5);
         z.fit(m);
         SgdMf s = heap SgdMf((int64) 20, (uint64) 7);
@@ -96,7 +96,7 @@ public class MfTest {
     // bit-identical predictions; different seed → different factors.
     @Test
     public void seededFitsReproduce() {
-        Interactions m = BaselinesTest.ratings();
+        Interactions m #= BaselinesTest.ratings();
         SgdMf a = heap SgdMf((int64) 8, (int64) 5, 0.01, 0.05, (uint64) 11);
         a.fit(m);
         SgdMf b = heap SgdMf((int64) 8, (int64) 5, 0.01, 0.05, (uint64) 11);
@@ -126,11 +126,11 @@ public class MfTest {
     // Surprise's, and comfortably below the global-mean baseline.
     @Test
     public void sgdMfTracksSurpriseRmse() {
-        Interactions m = KnnTest.load("rs_knn_train");
-        Tensor<float64> tr = Fx.load("rs_knn_test_r");
+        Interactions m #= KnnTest.load("rs_knn_train");
+        Tensor<float64> tr #= Fx.load("rs_knn_test_r");
         int64 n = tr.shapeAt(0);
-        int64[] us = KnnTest.mapUsers(m, "rs_knn_test");
-        int64[] is = KnnTest.mapItems(m, "rs_knn_test");
+        int64[] us #= KnnTest.mapUsers(m, "rs_knn_test");
+        int64[] is #= KnnTest.mapItems(m, "rs_knn_test");
         float64[] rs = heap float64[n];
         int64 t = 0;
         while (t < n) { rs[t] = tr.flatGet(t); t = t + 1; }
@@ -145,7 +145,7 @@ public class MfTest {
         if (d < 0.0) { d = -d; }
         Assert.isTrue(d < 0.08);
 
-        GlobalMean g = Baselines.globalMean();
+        GlobalMean g #= Baselines.globalMean();
         g.fit(m);
         Assert.isTrue(mine < RatingScore.rmse(g, us, is, rs));
         return;
@@ -155,13 +155,13 @@ public class MfTest {
     // are exactly max(σ − τ, 0) of the filled matrix's.
     @Test
     public void svtSoftThresholds() {
-        Interactions m = BaselinesTest.ratings();
+        Interactions m #= BaselinesTest.ratings();
         float64 tau = 5.0;
-        SvtModel model = Svt.complete(m, tau, 0.0);
+        SvtModel model #= Svt.complete(m, tau, 0.0);
         // Reference: SVD of the zero-filled dense, shrunk by hand.
-        Tensor<float64>[] usv = LinAlg.svd<float64>(m.toDense(0.0));
+        Tensor<float64>[] usv #= LinAlg.svd<float64>(m.toDense(0.0));
         Tensor<float64> s = usv[1];
-        float64[] got = model.singularValues();
+        float64[] got #= model.singularValues();
         int64 k = 0;
         while (k < s.shapeAt(0)) {
             float64 want = s.flatGet(k) - tau;
@@ -170,7 +170,7 @@ public class MfTest {
             k = k + 1;
         }
         // And the reconstruction's own SVD carries those values.
-        Tensor<float64>[] usv2 = LinAlg.svd<float64>(model.completed());
+        Tensor<float64>[] usv2 #= LinAlg.svd<float64>(model.completed());
         Tensor<float64> s2 = usv2[1];
         k = 0;
         while (k < 3) {
@@ -186,11 +186,11 @@ public class MfTest {
     // returns the candidate a manual sweep says is best.
     @Test
     public void thresholdSearchIsOrdinary() {
-        Interactions m = KnnTest.load("rs_knn_train");
-        Tensor<float64> tr = Fx.load("rs_knn_test_r");
+        Interactions m #= KnnTest.load("rs_knn_train");
+        Tensor<float64> tr #= Fx.load("rs_knn_test_r");
         int64 n = tr.shapeAt(0);
-        int64[] us = KnnTest.mapUsers(m, "rs_knn_test");
-        int64[] is = KnnTest.mapItems(m, "rs_knn_test");
+        int64[] us #= KnnTest.mapUsers(m, "rs_knn_test");
+        int64[] is #= KnnTest.mapItems(m, "rs_knn_test");
         float64[] rs = heap float64[n];
         int64 t = 0;
         while (t < n) { rs[t] = tr.flatGet(t); t = t + 1; }
@@ -202,7 +202,7 @@ public class MfTest {
         float64 bestScore = 0.0;
         t = 0;
         while (t < 4) {
-            SvtModel md = Svt.complete(m, taus[t], 0.0);
+            SvtModel md #= Svt.complete(m, taus[t], 0.0);
             float64 sc = RatingScore.rmse(md, us, is, rs);
             if (t == 0 || sc < bestScore) { bestScore = sc; manual = t; }
             t = t + 1;
@@ -215,11 +215,11 @@ public class MfTest {
     // the data's scale (which comes from the data, not a hardcoded 1–5).
     @Test
     public void factorsInspectableAndClipped() {
-        Interactions m = BaselinesTest.ratings();
+        Interactions m #= BaselinesTest.ratings();
         SgdMf s = heap SgdMf((int64) 6, (uint64) 3);
         s.fit(m);
-        float64[] uf = s.userFactor((int64) 0);
-        float64[] itf = s.itemFactor((int64) 0);
+        float64[] uf #= s.userFactor((int64) 0);
+        float64[] itf #= s.itemFactor((int64) 0);
         Assert.equals((int64) uf.count(), (int64) 6);
         Assert.equals((int64) itf.count(), (int64) 6);
 
@@ -231,7 +231,7 @@ public class MfTest {
         us[1] = "a"; is[1] = "y"; rs[1] = 4.0;
         us[2] = "b"; is[2] = "x"; rs[2] = 4.0;
         us[3] = "b"; is[3] = "y"; rs[3] = 2.0;
-        Interactions m2 = Interactions.of(us, is, rs);
+        Interactions m2 #= Interactions.of(us, is, rs);
         ZeroFilledSvd z = heap ZeroFilledSvd((int64) 2);
         z.fit(m2);
         int64 u = 0;

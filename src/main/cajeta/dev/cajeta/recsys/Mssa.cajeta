@@ -148,7 +148,7 @@ public final class Mssa {
                 }
             } else {
                 // THE transform — dev.cajeta.timeseries owns it.
-                Tensor<float64> tm = ss[m].trajectoryMatrix(L);
+                Tensor<float64> tm #= ss[m].trajectoryMatrix(L);
                 int64 i = 0;
                 while (i < L) {
                     int64 j = 0;
@@ -189,7 +189,7 @@ public final class Mssa {
             // Hard-impute EM: truncate, refill missing, repeat.
             int64 it = 0;
             while (it < 25) {
-                float64[] rec = this.truncate(big, L, wide);
+                float64[] rec #= this.truncate(big, L, wide);
                 t = 0;
                 while (t < L * wide) {
                     if (!present[t]) { big[t] = rec[t]; }
@@ -233,7 +233,7 @@ public final class Mssa {
         int64 t = 0;
         while (t < rows * cols) { cp[t] = a[t]; t = t + 1; }
         int64[] sh = heap int64[2]; sh[0] = rows; sh[1] = cols;
-        Tensor<float64>[] usv = LinAlg.svd<float64>(
+        Tensor<float64>[] usv #= LinAlg.svd<float64>(
             Tensor.of<float64>(cp, sh));
         Tensor<float64> u = usv[0];
         Tensor<float64> s = usv[1];
@@ -328,7 +328,7 @@ public final class Mssa {
         }
         int64[] xsh = heap int64[2]; xsh[0] = rows; xsh[1] = cols;
         int64[] ysh = heap int64[1]; ysh[0] = rows;
-        Tensor<float64> beta = LinAlg.lstsq<float64>(
+        Tensor<float64> beta #= LinAlg.lstsq<float64>(
             Tensor.of<float64>(xf, xsh), Tensor.of<float64>(yv, ysh));
         // Roll forward on the smoothed series.
         float64[] ext = heap float64[this.T + h];

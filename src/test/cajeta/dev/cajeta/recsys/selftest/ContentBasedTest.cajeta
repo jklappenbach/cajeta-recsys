@@ -18,7 +18,7 @@ public class ContentBasedTest {
     public ContentBasedTest() { return; }
 
     static #String[] texts() {
-        String all = Fx.loadText("rs_item_texts.txt");
+        String all #= Fx.loadText("rs_item_texts.txt");
         int64 n = all.count();
         int64 lines = 0;
         int64 i = 0;
@@ -34,7 +34,7 @@ public class ContentBasedTest {
             while (eol < n && all.charAt((int32) eol) != 10) {
                 eol = eol + 1;
             }
-            out[li] = all.substring((int32) i, (int32) eol);
+            out[li] #= all.substring((int32) i, (int32) eol);
             li = li + 1;
             i = eol + 1;
         }
@@ -47,7 +47,7 @@ public class ContentBasedTest {
     public void similarityMatchesSklearn() {
         ContentBased cb = heap ContentBased();
         cb.fitItems(ContentBasedTest.texts());
-        Tensor<float64> want = Fx.load("rs_content_sim");
+        Tensor<float64> want #= Fx.load("rs_content_sim");
         int64 n = cb.itemCount();
         Assert.equals(n, (int64) 6);
         int64 a = 0;
@@ -62,7 +62,7 @@ public class ContentBasedTest {
         }
         // 6.1.2 — top-n similar items, scored, self excluded: the two
         // baking texts (2, 3) find each other first.
-        TopNList sim = cb.similarItems((int64) 3, (int64) 2);
+        TopNList sim #= cb.similarItems((int64) 3, (int64) 2);
         Assert.equals(sim.itemAt((int64) 0), (int64) 2);
         Assert.isTrue(sim.scoreAt((int64) 0) > sim.scoreAt((int64) 1));
         return;
@@ -81,13 +81,13 @@ public class ContentBasedTest {
         us[0] = "fan"; is[0] = "0"; rs[0] = 5.0;
         us[1] = "fan"; is[1] = "4"; rs[1] = 4.5;
         us[2] = "fan"; is[2] = "2"; rs[2] = 1.0;
-        Interactions m = ContentBasedTest.matrix(us, is, rs);
+        Interactions m #= ContentBasedTest.matrix(us, is, rs);
         // NOTE the matrix indexes items by first appearance: raw "0"→0,
         // "4"→1, "2"→2. The PROFILES are indexed by text order, so the
         // caller aligns by using raw-id order in the matrix too — here
         // we look ups through the map.
         int64 u = m.userIndex("fan");
-        TopNList rec = cb.recommendFor(ContentBasedTest.aligned(m), u,
+        TopNList rec #= cb.recommendFor(ContentBasedTest.aligned(m), u,
             (int64) 2);
         // The space-station and salvage-crew items (1, 4-raw) lead; the
         // rated ones are absent.
@@ -100,7 +100,7 @@ public class ContentBasedTest {
         }
         Assert.equals(rec.itemAt((int64) 0), (int64) 1);   // space station
         // Opt-in brings the seen items back (§12.6).
-        TopNList all = cb.recommendFor(ContentBasedTest.aligned(m), u,
+        TopNList all #= cb.recommendFor(ContentBasedTest.aligned(m), u,
             (int64) 6, true);
         boolean sawSeen = false;
         r = 0;
@@ -126,9 +126,9 @@ public class ContentBasedTest {
         float64[] rs = heap float64[2];
         us[0] = "reader"; is[0] = "2"; rs[0] = 5.0;
         us[1] = "other";  is[1] = "0"; rs[1] = 3.0;
-        Interactions m = ContentBasedTest.matrix(us, is, rs);
+        Interactions m #= ContentBasedTest.matrix(us, is, rs);
         int64 u = m.userIndex("reader");
-        TopNList rec = cb.recommendFor(ContentBasedTest.aligned(m), u,
+        TopNList rec #= cb.recommendFor(ContentBasedTest.aligned(m), u,
             (int64) 2);
         // The cold-start romance (5) outranks space operas for them.
         boolean sawCold = false;
@@ -140,6 +140,7 @@ public class ContentBasedTest {
         Assert.isTrue(sawCold);
         return;
     }
+
     /**
      * A VIEW of `m`, whose item indexes already equal the raw ids: the
      * alignment is done by `matrix`, which primes 0..5 under a sentinel

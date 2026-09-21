@@ -37,7 +37,7 @@ public final class Tour {
         us[0] = "ana"; is[0] = "dune";    rs[0] = 0.0;   // rated ZERO
         us[1] = "ana"; is[1] = "solaris"; rs[1] = 5.0;
         us[2] = "ben"; is[2] = "solaris"; rs[2] = 4.0;
-        Interactions m = Interactions.of(us, is, rs);
+        Interactions m #= Interactions.of(us, is, rs);
         Tour.check(m.rating((int64) 0, (int64) 0) == 0.0,
             "a rating of zero is a rating");
         boolean threw = false;
@@ -64,16 +64,16 @@ public final class Tour {
         us[3] = "ben"; is[3] = "arrival";  rs[3] = 4.0;
         us[4] = "cai"; is[4] = "notebook"; rs[4] = 5.0;
         us[5] = "cai"; is[5] = "dune";     rs[5] = 2.0;
-        Interactions m = Interactions.of(us, is, rs);
-        BiasModel b = Baselines.bias();
+        Interactions m #= Interactions.of(us, is, rs);
+        BiasModel b #= Baselines.bias();
         b.fit(m);
         float64 est = b.predict(m.userIndex("ana"),
                                 m.itemIndex("arrival"));
         Tour.check(est >= m.minRating() && est <= m.maxRating(),
             "predictions live on the data's own rating scale");
-        KnnCf knn = KnnCf.userBased("msd", (int64) 5, (int64) 1);
+        KnnCf knn #= KnnCf.userBased("msd", (int64) 5, (int64) 1);
         knn.fit(m);
-        TopNList rec = TopN.recommend(knn, m, m.userIndex("ana"),
+        TopNList rec #= TopN.recommend(knn, m, m.userIndex("ana"),
                                       (int64) 2);
         int64 r = 0;
         boolean cleanList = true;
@@ -97,7 +97,7 @@ public final class Tour {
         texts[2] = "spaceship rescue crews in distant orbit";
         ContentBased cb = heap ContentBased();
         cb.fitItems(texts);
-        TopNList sim = cb.similarItems((int64) 0, (int64) 1);
+        TopNList sim #= cb.similarItems((int64) 0, (int64) 1);
         Tour.check(sim.itemAt((int64) 0) == (int64) 2,
             "an unrated item is reachable through its features alone");
         return;

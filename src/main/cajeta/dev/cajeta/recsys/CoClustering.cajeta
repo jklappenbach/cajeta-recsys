@@ -92,8 +92,8 @@ public final class CoClustering implements RatingPredictor {
         this.iMean #= im;
 
         Generator g = heap Generator(this.seed);
-        Tensor<int64> ru = g.integers((int64) 0, this.kU, this.nU);
-        Tensor<int64> ri = g.integers((int64) 0, this.kI, this.nI);
+        Tensor<int64> ru #= g.integers((int64) 0, this.kU, this.nU);
+        Tensor<int64> ri #= g.integers((int64) 0, this.kI, this.nI);
         int64[] cu = heap int64[this.nU];
         int64[] ci = heap int64[this.nI];
         u = 0;

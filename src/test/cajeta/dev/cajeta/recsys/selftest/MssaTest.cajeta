@@ -40,7 +40,7 @@ public class MssaTest {
     // 7.1.2 — the default window is ⌊√T⌋.
     @Test
     public void defaultWindowIsSqrtT() {
-        Series s = MssaTest.wave((int64) 144, 3.0, 0.0);
+        Series s #= MssaTest.wave((int64) 144, 3.0, 0.0);
         Mssa m = heap Mssa((int64) 2);
         m.fit(s);
         Assert.equals(m.fittedWindow(), (int64) 12);
@@ -57,7 +57,7 @@ public class MssaTest {
     @Test
     public void missingValuesAreImputedByCompletion() {
         int64 n = 144;
-        Series clean = MssaTest.wave(n, 3.0, 0.0);
+        Series clean #= MssaTest.wave(n, 3.0, 0.0);
         float64[] holed = heap float64[n];
         int64 t = 0;
         while (t < n) { holed[t] = clean.get(t); t = t + 1; }
@@ -68,12 +68,12 @@ public class MssaTest {
             h = h + 1;
         }
         int64[] sh = heap int64[1]; sh[0] = n;
-        Series s = Series.of(Tensor.of<float64>(holed, sh));
+        Series s #= Series.of(Tensor.of<float64>(holed, sh));
         Assert.equals(s.missingCount(), (int64) 12);
 
         Mssa m = heap Mssa((int64) 12, (int64) 2);
         m.fit(s);
-        Series est = m.estimate((int64) 0);
+        Series est #= m.estimate((int64) 0);
         // At every knocked-out position the imputation lands on the
         // clean signal.
         h = 0;
@@ -91,11 +91,11 @@ public class MssaTest {
     public void forecastExtendsAndMapsBack() {
         int64 n = 144;
         int64 h = 12;
-        Series full = MssaTest.wave(n + h, 3.0, 0.0);
-        Series train = MssaTest.wave(n, 3.0, 0.0);
+        Series full #= MssaTest.wave(n + h, 3.0, 0.0);
+        Series train #= MssaTest.wave(n, 3.0, 0.0);
         Mssa m = heap Mssa((int64) 12, (int64) 2);
         m.fit(train);
-        Series fc = m.forecast((int64) 0, h);
+        Series fc #= m.forecast((int64) 0, h);
         Assert.equals(fc.count(), h);
         Assert.equals(fc.indexAt((int64) 0), n);
         int64 t = 0;
@@ -113,14 +113,14 @@ public class MssaTest {
     public void nonStationarySeriesNeedsNoDifferencing() {
         int64 n = 144;
         int64 h = 12;
-        Series full = MssaTest.wave(n + h, 3.0, 0.05);
-        Series train = MssaTest.wave(n, 3.0, 0.05);
-        AdfResult adf = Adf.test(train);
+        Series full #= MssaTest.wave(n + h, 3.0, 0.05);
+        Series train #= MssaTest.wave(n, 3.0, 0.05);
+        AdfResult adf #= Adf.test(train);
         Assert.isTrue(!adf.isStationary(0.05));        // certified trending
 
         Mssa m = heap Mssa((int64) 12, (int64) 4);     // trend costs rank
         m.fit(train);
-        Series fc = m.forecast((int64) 0, h);
+        Series fc #= m.forecast((int64) 0, h);
         float64 errM = 0.0;
         int64 t = 0;
         while (t < h) {
@@ -130,7 +130,7 @@ public class MssaTest {
         }
         MovingAverageForecaster base = heap MovingAverageForecaster((int64) 12);
         base.fit(train);
-        Series bf = base.forecast(h);
+        Series bf #= base.forecast(h);
         float64 errB = 0.0;
         t = 0;
         while (t < h) {
@@ -160,13 +160,13 @@ public class MssaTest {
         }
         int64[] sh = heap int64[1]; sh[0] = n;
         Series[] ss = heap Series[2];
-        ss[0] = Series.of(Tensor.of<float64>(a, sh));
-        ss[1] = Series.of(Tensor.of<float64>(b, sh));
+        ss[0] #= Series.of(Tensor.of<float64>(a, sh));
+        ss[1] #= Series.of(Tensor.of<float64>(b, sh));
         Mssa m = heap Mssa((int64) 12, (int64) 2);
         m.fitAll(ss);
         Assert.equals((int64) m.singularValues().count(), (int64) 2);
-        Series e0 = m.estimate((int64) 0);
-        Series e1 = m.estimate((int64) 1);
+        Series e0 #= m.estimate((int64) 0);
+        Series e1 #= m.estimate((int64) 1);
         t = 0;
         while (t < n) {
             Assert.isTrue(Fx.close(e0.get(t), a[t], 0.05));

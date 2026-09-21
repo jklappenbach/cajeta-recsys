@@ -32,7 +32,7 @@ public final class Harness {
         if ((int64) names.count() != n || n < 1) {
             throw heap RsException("Harness: algos/names mismatch");
         }
-        ItemMean bar = Baselines.itemMean();
+        ItemMean bar #= Baselines.itemMean();
         bar.fit(train);
         float64 barRmse = RatingScore.rmse(bar, us, is, rs);
         float64[] rmses = heap float64[n];

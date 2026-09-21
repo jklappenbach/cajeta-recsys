@@ -16,16 +16,16 @@ public final class RatingScore {
     /** RMSE of `p` over the held-out triples. */
     public static float64 rmse(RatingPredictor p, int64[] us, int64[] is,
                                float64[] rs) {
-        Tensor<float64> a = RatingScore.actual(rs);
-        Tensor<float64> q = RatingScore.predicted(p, us, is);
+        Tensor<float64> a #= RatingScore.actual(rs);
+        Tensor<float64> q #= RatingScore.predicted(p, us, is);
         return Metrics.rmse(a, q);
     }
 
     /** MAE of `p` over the held-out triples. */
     public static float64 mae(RatingPredictor p, int64[] us, int64[] is,
                               float64[] rs) {
-        Tensor<float64> a = RatingScore.actual(rs);
-        Tensor<float64> q = RatingScore.predicted(p, us, is);
+        Tensor<float64> a #= RatingScore.actual(rs);
+        Tensor<float64> q #= RatingScore.predicted(p, us, is);
         return Metrics.mae(a, q);
     }
 

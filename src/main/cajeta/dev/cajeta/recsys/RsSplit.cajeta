@@ -48,7 +48,7 @@ public final class RsSplit {
         int64 nTest = (int64) (testFraction * (float64) n);
         if (nTest < 1) { nTest = 1; }
         Generator g = heap Generator(seed);
-        Tensor<int64> perm = g.permutation(n);
+        Tensor<int64> perm #= g.permutation(n);
         boolean[] inTest = heap boolean[n];
         // Track remaining train support per user/item as we move rows.
         int64 maxU = 0;

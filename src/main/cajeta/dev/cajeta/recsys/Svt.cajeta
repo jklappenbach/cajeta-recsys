@@ -24,8 +24,8 @@ public final class Svt {
         }
         int64 nU = m.userCount();
         int64 nI = m.itemCount();
-        Tensor<float64> dense = m.toDense(fill);
-        Tensor<float64>[] usv = LinAlg.svd<float64>(dense);
+        Tensor<float64> dense #= m.toDense(fill);
+        Tensor<float64>[] usv #= LinAlg.svd<float64>(dense);
         Tensor<float64> u = usv[0];
         Tensor<float64> s = usv[1];
         Tensor<float64> vt = usv[2];
@@ -58,7 +58,7 @@ public final class Svt {
             a = a + 1;
         }
         int64[] sh = heap int64[2]; sh[0] = nU; sh[1] = nI;
-        Tensor<float64> rt = Tensor.of<float64>(rc, sh);
+        Tensor<float64> rt #= Tensor.of<float64>(rc, sh);
         SvtModel model = heap SvtModel(#rt, #shrunk,
             Baselines.observedMean(m), m.minRating(), m.maxRating());
         return #model;
@@ -80,7 +80,7 @@ public final class Svt {
         float64 bestScore = 0.0;
         int64 t = 0;
         while (t < (int64) taus.count()) {
-            SvtModel model = Svt.complete(m, taus[t], fill);
+            SvtModel model #= Svt.complete(m, taus[t], fill);
             float64 score = RatingScore.rmse(model, us, is, rs);
             if (t == 0 || score < bestScore) {
                 bestScore = score;

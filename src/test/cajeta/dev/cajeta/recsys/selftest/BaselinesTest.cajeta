@@ -23,9 +23,9 @@ public class BaselinesTest {
 
     /** The pinned 200-rating fixture as an Interactions matrix. */
     static #Interactions ratings() {
-        Tensor<float64> tu = Fx.load("rs_ratings_u");
-        Tensor<float64> ti = Fx.load("rs_ratings_i");
-        Tensor<float64> tr = Fx.load("rs_ratings_r");
+        Tensor<float64> tu #= Fx.load("rs_ratings_u");
+        Tensor<float64> ti #= Fx.load("rs_ratings_i");
+        Tensor<float64> tr #= Fx.load("rs_ratings_r");
         int64 n = tu.shapeAt(0);
         String[] us = heap String[n];
         String[] is = heap String[n];
@@ -45,8 +45,8 @@ public class BaselinesTest {
     // any zero-filled view.
     @Test
     public void globalMeanIsObservedOnly() {
-        Interactions m = BaselinesTest.ratings();
-        GlobalMean g = Baselines.globalMean();
+        Interactions m #= BaselinesTest.ratings();
+        GlobalMean g #= Baselines.globalMean();
         g.fit(m);
         float64 want = Fx.load("rs_baseline_mu").flatGet((int64) 0);
         Assert.isTrue(Fx.close(g.predict((int64) 0, (int64) 0), want,
@@ -71,15 +71,15 @@ public class BaselinesTest {
         us[1] = "A"; is[1] = "y"; rs[1] = 3.0;
         us[2] = "B"; is[2] = "y"; rs[2] = 5.0;
         us[3] = "B"; is[3] = "z"; rs[3] = 2.0;
-        Interactions m = Interactions.of(us, is, rs);
+        Interactions m #= Interactions.of(us, is, rs);
 
-        ItemMean im = Baselines.itemMean();
+        ItemMean im #= Baselines.itemMean();
         im.fit(m);
         Assert.isTrue(im.predict((int64) 0, (int64) 0) == 1.0);   // x: {1}
         Assert.isTrue(im.predict((int64) 0, (int64) 1) == 4.0);   // y: {3,5}
         Assert.isTrue(im.predict((int64) 1, (int64) 2) == 2.0);   // z: {2}
 
-        UserMean um = Baselines.userMean();
+        UserMean um #= Baselines.userMean();
         um.fit(m);
         Assert.isTrue(um.predict((int64) 0, (int64) 2) == 2.0);   // A: {1,3}
         Assert.isTrue(um.predict((int64) 1, (int64) 0) == 3.5);   // B: {5,2}
@@ -93,13 +93,13 @@ public class BaselinesTest {
     // claim (2.4).
     @Test
     public void biasModelMatchesSurprise() {
-        Interactions m = BaselinesTest.ratings();
-        BiasModel b = Baselines.bias();
+        Interactions m #= BaselinesTest.ratings();
+        BiasModel b #= Baselines.bias();
         b.fit(m);
         float64 mu = Fx.load("rs_baseline_mu").flatGet((int64) 0);
         Assert.isTrue(Fx.close(b.globalMean(), mu, 0.0000000001));
-        Tensor<float64> wbu = Fx.load("rs_baseline_bu");
-        Tensor<float64> wbi = Fx.load("rs_baseline_bi");
+        Tensor<float64> wbu #= Fx.load("rs_baseline_bu");
+        Tensor<float64> wbi #= Fx.load("rs_baseline_bi");
         int64 u = 0;
         while (u < m.userCount()) {
             int64 ix = m.userIndex("" + u);
@@ -135,20 +135,20 @@ public class BaselinesTest {
     // crash, never an arbitrary constant.
     @Test
     public void fallbackChainIsDocumented() {
-        Interactions m = BaselinesTest.ratings();
+        Interactions m #= BaselinesTest.ratings();
         float64 mu = Fx.load("rs_baseline_mu").flatGet((int64) 0);
 
-        ItemMean im = Baselines.itemMean();
+        ItemMean im #= Baselines.itemMean();
         im.fit(m);
         Assert.isTrue(Fx.close(im.predict((int64) 0, (int64) -1), mu,
             0.0000000001));
 
-        UserMean um = Baselines.userMean();
+        UserMean um #= Baselines.userMean();
         um.fit(m);
         Assert.isTrue(Fx.close(um.predict((int64) -1, (int64) 0), mu,
             0.0000000001));
 
-        BiasModel b = Baselines.bias();
+        BiasModel b #= Baselines.bias();
         b.fit(m);
         // Both unknown → μ (clipped identity: μ is inside the scale).
         Assert.isTrue(Fx.close(b.predict((int64) -1, (int64) -1), mu,
@@ -165,10 +165,10 @@ public class BaselinesTest {
     // entry point every later unit must use.
     @Test
     public void sharedScoringEntryRanksBaselines() {
-        Interactions m = BaselinesTest.ratings();
-        Tensor<float64> tu = Fx.load("rs_ratings_u");
-        Tensor<float64> ti = Fx.load("rs_ratings_i");
-        Tensor<float64> tr = Fx.load("rs_ratings_r");
+        Interactions m #= BaselinesTest.ratings();
+        Tensor<float64> tu #= Fx.load("rs_ratings_u");
+        Tensor<float64> ti #= Fx.load("rs_ratings_i");
+        Tensor<float64> tr #= Fx.load("rs_ratings_r");
         int64 n = tu.shapeAt(0);
         int64[] us = heap int64[n];
         int64[] is = heap int64[n];
@@ -182,9 +182,9 @@ public class BaselinesTest {
             rs[t] = tr.flatGet(t);
             t = t + 1;
         }
-        GlobalMean g = Baselines.globalMean();
+        GlobalMean g #= Baselines.globalMean();
         g.fit(m);
-        BiasModel b = Baselines.bias();
+        BiasModel b #= Baselines.bias();
         b.fit(m);
         float64 rg = RatingScore.rmse(g, us, is, rs);
         float64 rb = RatingScore.rmse(b, us, is, rs);

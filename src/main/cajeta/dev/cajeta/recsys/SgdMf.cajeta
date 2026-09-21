@@ -77,8 +77,8 @@ public final class SgdMf implements RatingPredictor {
         this.nI = m.itemCount();
         int64 f = this.nFactors;
         Generator g = heap Generator(this.seed);
-        Tensor<float32> zp = g.normal(this.nU * f);
-        Tensor<float32> zq = g.normal(this.nI * f);
+        Tensor<float32> zp #= g.normal(this.nU * f);
+        Tensor<float32> zq #= g.normal(this.nI * f);
         float64[] pu = heap float64[this.nU * f];
         float64[] qi = heap float64[this.nI * f];
         int64 t = 0;
