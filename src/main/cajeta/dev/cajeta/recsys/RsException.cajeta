@@ -11,7 +11,7 @@ import cajeta.lang.String;
  */
 public class RsException extends RecoverableException {
     public RsException(String message) {
-        this.message = message;
+        this.message #= message;
         this.cause = 0;
     }
 }

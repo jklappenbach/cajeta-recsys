@@ -53,7 +53,9 @@ env:
   # have. Measured both directions on extracted debs rather than assumed: the
   # corrected src/main/cajeta compiles on v0.17.4 as well as on v0.29.0, so
   # this library's own code does not demand the new floor, the pegs do.
-  CAJETA_VERSION: v0.29.0
+  #
+  # v0.35.0 enforces the field-store rule, so every sibling peg moves to its v0.35.0 republish.
+  CAJETA_VERSION: v0.35.0
 
 jobs:
   build-test:
