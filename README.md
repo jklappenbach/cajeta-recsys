@@ -53,8 +53,8 @@ Departures live in [docs/DifferencesFromOracles.md](docs/DifferencesFromOracles.
 cajeta build      # emit build/archive/dev.cajeta.recsys-<version>.cja
 ```
 
-Depends on `dev.cajeta.ml` 0.10.3 (`Metrics`, `KMeans`, the protocol
-where it genuinely fits), `dev.cajeta.timeseries` 0.1.3 (the trajectory
-transform) and `dev.cajeta.docs` 0.1.2 (the TF-IDF vectorizer the
+Depends on `dev.cajeta.ml` 0.10.4 (`Metrics`, `KMeans`, the protocol
+where it genuinely fits), `dev.cajeta.timeseries` 0.1.4 (the trajectory
+transform) and `dev.cajeta.docs` 0.1.3 (the TF-IDF vectorizer the
 content-based profiles are built from). Built and gated on cajeta
-v0.35.0.
+v0.36.0.
