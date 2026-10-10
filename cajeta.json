@@ -21,7 +21,7 @@
 
     "details": {
         "name":               "dev.cajeta.recsys",
-        "version":            "0.1.4",
+        "version":            "0.1.5",
         "description":        "cajeta-recsys — recommenders: interaction matrix (missing != zero), baselines, neighbourhood + factorization CF, co-clustering, ranking metrics, mSSA",
         "license":            "Apache-2.0",
         "authors":            ["Julian Klappenbach"],
@@ -46,9 +46,9 @@
         // 0.10.0 peg transitively, so it moves with it. Measured one peg at
         // a time so each error is attributed to the peg that carries it.
         "dependencies": {
-            "dev.cajeta.ml": "0.10.5",
-            "dev.cajeta.timeseries": "0.1.5",
-            "dev.cajeta.docs": "0.1.4"
+            "dev.cajeta.ml": "0.10.6",
+            "dev.cajeta.timeseries": "0.1.6",
+            "dev.cajeta.docs": "0.1.5"
         },
 
         // 0.3.0 is a REQUIRED floor for the same reason: 0.2.0 carries a
@@ -56,7 +56,7 @@
         // so the test binary refuses to link naming `pred`. 0.3.0 takes the
         // predicate owned.
         "dev-dependencies": {
-            "dev.cajeta.unit": "0.3.5"
+            "dev.cajeta.unit": "0.3.6"
         },
 
         "repositories": [

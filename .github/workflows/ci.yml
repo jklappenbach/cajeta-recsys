@@ -57,7 +57,8 @@ env:
   # v0.35.0 enforces the field-store rule, so every sibling peg moves to its v0.35.0 republish.
   # v0.36.0 extends the keep check to holders passed with `#`, so every peg moves to its v0.36.0 republish.
   # v0.38.0 adds no ownership check, so every peg moves to its v0.38.0 republish.
-  CAJETA_VERSION: v0.38.0
+  # v0.39.0 adds no ownership check, so every peg moves to its v0.39.0 republish.
+  CAJETA_VERSION: v0.39.0
 
 jobs:
   build-test:
