@@ -59,7 +59,7 @@ env:
   # v0.36.0 extends the keep check to holders passed with `#`, so every peg moves to its v0.36.0 republish.
   # v0.38.0 adds no ownership check, so every peg moves to its v0.38.0 republish.
   # v0.39.0 adds no ownership check, so every peg moves to its v0.39.0 republish.
-  CAJETA_VERSION: v0.39.0
+  CAJETA_VERSION: v0.51.0
 
 jobs:
   build-test:
